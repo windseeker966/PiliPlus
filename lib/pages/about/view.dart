@@ -12,6 +12,7 @@ import 'package:PiliPlus/common/widgets/flutter/list_tile.dart';
 import 'package:PiliPlus/common/widgets/scaffold/simple_scaffold.dart';
 import 'package:PiliPlus/pages/mine/controller.dart';
 import 'package:PiliPlus/services/logger.dart';
+import 'package:PiliPlus/services/usage_log.dart';
 import 'package:PiliPlus/utils/accounts.dart';
 import 'package:PiliPlus/utils/accounts/account.dart';
 import 'package:PiliPlus/utils/android/bindings.g.dart';
@@ -267,6 +268,12 @@ Commit Hash: ${BuildConfig.commitHash}''',
               onExport: GStorage.exportAllSettings,
               onImport: GStorage.importAllJsonSettings,
             ),
+          ),
+          ListTile(
+            title: const Text('导出使用记录'),
+            leading: const Icon(Icons.history_outlined),
+            subtitle: Text('导出为 SQLite 数据库文件', style: subTitleStyle),
+            onTap: UsageLog.export,
           ),
           ListTile(
             title: const Text('重置所有设置'),

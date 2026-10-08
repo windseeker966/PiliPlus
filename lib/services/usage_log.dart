@@ -19,7 +19,7 @@
 
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io' show Platform;
+import 'dart:io' show File, Platform;
 import 'dart:math' as math;
 
 import 'package:PiliPlus/grpc/bilibili/app/listener/v1.pb.dart' show DetailItem;
@@ -30,10 +30,13 @@ import 'package:PiliPlus/models_new/video/video_detail/data.dart';
 import 'package:PiliPlus/models_new/video/video_detail/page.dart';
 import 'package:PiliPlus/plugin/pl_player/controller.dart';
 import 'package:PiliPlus/plugin/pl_player/models/play_status.dart';
+import 'package:PiliPlus/utils/date_utils.dart';
 import 'package:PiliPlus/utils/path_utils.dart';
+import 'package:PiliPlus/utils/storage_utils.dart';
 import 'package:flutter/foundation.dart' show debugPrint, kDebugMode;
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
+import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:path/path.dart' as path;
 import 'package:sqlite3/sqlite3.dart';
 
@@ -173,6 +176,36 @@ abstract final class UsageLog {
     _failing = false;
     _queue.removeRange(0, batch.length);
     if (_forwardToTimeTracker) _forward(batch);
+  }
+
+  /// 把全部记录导出为一个独立的 SQLite 数据库文件，由用户选择保存位置。
+  static Future<void> export() async {
+    final db = _db;
+    if (db == null) {
+      SmartDialog.showToast('使用记录未启用');
+      return;
+    }
+    _flushNow();
+    final tmp = File(path.join(tmpDirPath, 'usage_log_export.db'));
+    final Uint8List bytes;
+    try {
+      if (tmp.existsSync()) tmp.deleteSync();
+      // VACUUM INTO 生成一份一致的副本，不受 WAL 中未合并内容影响。
+      db.execute('VACUUM INTO ?', [tmp.path]);
+      bytes = await tmp.readAsBytes();
+    } catch (e) {
+      SmartDialog.showToast('导出失败: $e');
+      return;
+    } finally {
+      if (tmp.existsSync()) tmp.deleteSync();
+    }
+    await StorageUtils.saveBytes2File(
+      name:
+          'piliplus_usage_log_'
+          '${DateFormatUtils.only0_9.format(DateTime.now())}.db',
+      bytes: bytes,
+      allowedExtensions: const ['db'],
+    );
   }
 
   /// 转发给「本地时间采集」（Android，UsageLogBridge.kt）。数据库才是权威记录，
