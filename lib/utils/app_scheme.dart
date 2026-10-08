@@ -18,6 +18,7 @@ import 'package:PiliPlus/pages/live/view.dart';
 import 'package:PiliPlus/pages/rank/view.dart';
 import 'package:PiliPlus/pages/subscription_detail/view.dart';
 import 'package:PiliPlus/pages/video/reply_reply/view.dart';
+import 'package:PiliPlus/services/usage_log.dart';
 import 'package:PiliPlus/utils/id_utils.dart';
 import 'package:PiliPlus/utils/page_utils.dart';
 import 'package:PiliPlus/utils/parse_string.dart';
@@ -44,9 +45,10 @@ abstract final class PiliScheme {
     appLinks = AppLinks();
 
     listener?.cancel();
-    listener = appLinks.uriLinkStream.listen(
-      PlatformUtils.isDesktop ? _desktopRoutePush : routePush,
-    );
+    listener = appLinks.uriLinkStream.listen((uri) {
+      UsageLog.deepLink(uri);
+      PlatformUtils.isDesktop ? _desktopRoutePush(uri) : routePush(uri);
+    });
   }
 
   static Future<bool> _desktopRoutePush(Uri uri) async {

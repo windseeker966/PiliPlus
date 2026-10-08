@@ -28,6 +28,7 @@ import 'package:PiliPlus/pages/video/related/controller.dart';
 import 'package:PiliPlus/pages/video/reply/controller.dart';
 import 'package:PiliPlus/plugin/pl_player/models/play_repeat.dart';
 import 'package:PiliPlus/services/service_locator.dart';
+import 'package:PiliPlus/services/usage_log.dart';
 import 'package:PiliPlus/utils/accounts.dart';
 import 'package:PiliPlus/utils/android/android_helper.dart';
 import 'package:PiliPlus/utils/device_utils.dart';
@@ -283,6 +284,7 @@ class UgcIntroController extends CommonIntroController with ReloadMixin {
   // 分享视频
   @override
   void actionShareVideo(BuildContext context) {
+    UsageLog.feedback('share', bvid: bvid);
     final videoDetail = this.videoDetail.value;
     final cid = this.cid.value;
     final partIndex = videoDetail.pages?.indexWhere((e) => e.cid == cid);

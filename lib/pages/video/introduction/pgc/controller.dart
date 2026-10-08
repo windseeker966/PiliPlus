@@ -20,6 +20,7 @@ import 'package:PiliPlus/pages/dynamics_repost/view.dart';
 import 'package:PiliPlus/pages/video/reply/controller.dart';
 import 'package:PiliPlus/plugin/pl_player/models/play_repeat.dart';
 import 'package:PiliPlus/services/service_locator.dart';
+import 'package:PiliPlus/services/usage_log.dart';
 import 'package:PiliPlus/utils/android/android_helper.dart';
 import 'package:PiliPlus/utils/bili_utils.dart';
 import 'package:PiliPlus/utils/feed_back.dart';
@@ -134,6 +135,7 @@ class PgcIntroController extends CommonIntroController {
   // 分享视频
   @override
   void actionShareVideo(BuildContext context) {
+    UsageLog.feedback('share', bvid: bvid, extra: {'ep_id': epId});
     String videoUrl =
         '${HttpString.baseUrl}/bangumi/play/ep$epId${videoDetailCtr.playedTimePos}';
     showDialog(

@@ -28,6 +28,7 @@ import 'package:PiliPlus/models_new/video/video_note_list/data.dart';
 import 'package:PiliPlus/models_new/video/video_play_info/data.dart';
 import 'package:PiliPlus/models_new/video/video_relation/data.dart';
 import 'package:PiliPlus/models_new/video/video_shot/data.dart';
+import 'package:PiliPlus/services/usage_log.dart';
 import 'package:PiliPlus/utils/accounts.dart';
 import 'package:PiliPlus/utils/app_sign.dart';
 import 'package:PiliPlus/utils/extension/string_ext.dart';
@@ -382,6 +383,11 @@ abstract final class VideoHttp {
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );
     if (res.data['code'] == 0) {
+      UsageLog.feedback(
+        'coin',
+        bvid: bvid,
+        extra: {'multiply': multiply, 'with_like': selectLike == 1},
+      );
       return const Success(null);
     } else {
       return Error(res.data['message']);
@@ -407,6 +413,7 @@ abstract final class VideoHttp {
       ),
     );
     if (res.data['code'] == 0) {
+      UsageLog.feedback('triple', extra: {'ep_id': epId});
       return Success(PgcTriple.fromJson(res.data['data']));
     } else {
       return Error(res.data['message']);
@@ -439,6 +446,7 @@ abstract final class VideoHttp {
       ),
     );
     if (res.data['code'] == 0) {
+      UsageLog.feedback('triple', bvid: bvid);
       return Success(UgcTriple.fromJson(res.data['data']));
     } else {
       return Error(res.data['message']);
@@ -456,6 +464,7 @@ abstract final class VideoHttp {
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );
     if (res.data['code'] == 0) {
+      UsageLog.feedback(type ? 'like' : 'unlike', bvid: bvid);
       return Success(res.data['data']['toast']);
     } else {
       return Error(res.data['message']);
@@ -479,6 +488,7 @@ abstract final class VideoHttp {
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );
     if (res.data is! String && res.data['code'] == 0) {
+      UsageLog.feedback(type ? 'dislike' : 'undislike', bvid: bvid);
       return const Success(null);
     } else {
       return Error(res.data is String ? res.data : res.data['message']);
@@ -491,6 +501,7 @@ abstract final class VideoHttp {
     required int id,
     int? reasonId,
     int? feedbackId,
+    String? reasonName,
   }) async {
     if (Accounts.get(AccountType.recommend).accessKey.isNullOrEmpty) {
       return const Error('请退出账号后重新登录');
@@ -508,6 +519,17 @@ abstract final class VideoHttp {
       },
     );
     if (res.data['code'] == 0) {
+      UsageLog.feedback(
+        'not_interested',
+        aid: goto == 'av' ? id : null,
+        extra: {
+          'goto': goto,
+          'id': id,
+          'reason_id': reasonId,
+          'feedback_id': feedbackId,
+          'reason': reasonName,
+        },
+      );
       return const Success(null);
     } else {
       return Error(res.data['message']);
@@ -536,6 +558,11 @@ abstract final class VideoHttp {
       },
     );
     if (res.data['code'] == 0) {
+      UsageLog.feedback(
+        'not_interested_cancel',
+        aid: goto == 'av' ? id : null,
+        extra: {'goto': goto, 'id': id},
+      );
       return const Success(null);
     } else {
       return Error(res.data['message']);
@@ -620,6 +647,14 @@ abstract final class VideoHttp {
     }
   }
 
+  static const _relationActions = {
+    1: 'follow',
+    2: 'unfollow',
+    3: 'follow_quietly',
+    4: 'unfollow_quietly',
+    7: 'remove_fan',
+  };
+
   // 操作用户关系
   static Future<LoadingState<void>> relationMod({
     required int mid,
@@ -661,6 +696,10 @@ abstract final class VideoHttp {
       ),
     );
     if (res.data['code'] == 0) {
+      // 拉黑与取消拉黑在 Pref.setBlackMid / removeBlackMid 中记录。
+      if (_relationActions[act] case final action?) {
+        UsageLog.feedback(action, mid: mid, extra: {'re_src': reSrc});
+      }
       if (isBlock) {
         // block
         Pref.setBlackMid(mid);

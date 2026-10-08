@@ -13,6 +13,7 @@ import 'package:PiliPlus/models_new/fav/fav_topic/data.dart';
 import 'package:PiliPlus/models_new/space/space_cheese/data.dart';
 import 'package:PiliPlus/models_new/space/space_fav/data.dart';
 import 'package:PiliPlus/models_new/sub/sub_detail/data.dart';
+import 'package:PiliPlus/services/usage_log.dart';
 import 'package:PiliPlus/utils/accounts.dart';
 import 'package:PiliPlus/utils/app_sign.dart';
 import 'package:dio/dio.dart';
@@ -629,6 +630,26 @@ abstract final class FavHttp {
     }
   }
 
+  /// resources 为「id:类型」，多个用逗号分隔；类型 2 为视频。
+  static void _logFav(String resources, String? addIds, String? delIds) {
+    final add = addIds?.isNotEmpty == true;
+    final del = delIds?.isNotEmpty == true;
+    if (!add && !del) return;
+    final items = resources.split(',');
+    final single = items.length == 1 ? items.first.split(':') : null;
+    UsageLog.feedback(
+      add ? 'fav' : 'unfav',
+      aid: single != null && single.length == 2 && single[1] == '2'
+          ? single[0]
+          : null,
+      extra: {
+        'resources': resources,
+        'add_ids': addIds,
+        'del_ids': delIds,
+      },
+    );
+  }
+
   // （取消）收藏
   static Future<LoadingState<void>> favVideo({
     required String resources,
@@ -646,6 +667,7 @@ abstract final class FavHttp {
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );
     if (res.data['code'] == 0) {
+      _logFav(resources, addIds, delIds);
       return const Success(null);
     } else {
       return Error(res.data['message']);
@@ -667,6 +689,11 @@ abstract final class FavHttp {
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );
     if (res.data['code'] == 0) {
+      UsageLog.feedback(
+        'unfav_all',
+        aid: type.toString() == '2' ? rid : null,
+        extra: {'rid': rid, 'type': type},
+      );
       return const Success(null);
     } else {
       return Error(res.data['message']);

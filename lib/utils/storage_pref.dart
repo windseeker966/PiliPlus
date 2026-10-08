@@ -33,6 +33,7 @@ import 'package:PiliPlus/plugin/pl_player/models/bottom_progress_behavior.dart';
 import 'package:PiliPlus/plugin/pl_player/models/fullscreen_mode.dart';
 import 'package:PiliPlus/plugin/pl_player/models/hwdec_type.dart';
 import 'package:PiliPlus/plugin/pl_player/models/play_repeat.dart';
+import 'package:PiliPlus/services/usage_log.dart';
 import 'package:PiliPlus/utils/device_utils.dart';
 import 'package:PiliPlus/utils/extension/iterable_ext.dart';
 import 'package:PiliPlus/utils/global_data.dart';
@@ -74,15 +75,18 @@ abstract final class Pref {
     defaultValue: RuleFilter.empty(),
   );
 
-  static void setBlackMid(int mid) => _localCache.put(
-    LocalCacheKey.blackMids,
-    GlobalData().blackMids..add(mid),
-  );
+  static void setBlackMid(int mid) {
+    UsageLog.feedback('block', mid: mid);
+    _localCache.put(LocalCacheKey.blackMids, GlobalData().blackMids..add(mid));
+  }
 
-  static void removeBlackMid(int mid) => _localCache.put(
-    LocalCacheKey.blackMids,
-    GlobalData().blackMids..remove(mid),
-  );
+  static void removeBlackMid(int mid) {
+    UsageLog.feedback('unblock', mid: mid);
+    _localCache.put(
+      LocalCacheKey.blackMids,
+      GlobalData().blackMids..remove(mid),
+    );
+  }
 
   static MemberTabType get memberTab =>
       MemberTabType.values[_setting.get(

@@ -24,7 +24,7 @@ abstract class CommonListController<R, T> extends CommonController<R, T> {
   Future<void> queryData([bool isRefresh = true]) async {
     if (isLoading || (!isRefresh && isEnd)) return;
     isLoading = true;
-    UsageLog.listQuery(this, isRefresh, page);
+    final requestId = UsageLog.listQuery(this, isRefresh, page);
     final LoadingState<R> res = await customGetData();
     if (res case Success(:final response)) {
       if (!customHandleResponse(isRefresh, res)) {
@@ -39,6 +39,12 @@ abstract class CommonListController<R, T> extends CommonController<R, T> {
           isLoading = false;
           return;
         }
+        UsageLog.listResponse(
+          this,
+          requestId,
+          dataList,
+          isRefresh ? 0 : loadingState.value.dataOrNull?.length ?? 0,
+        );
         handleListResponse(dataList);
         if (isRefresh) {
           checkIsEnd(dataList.length);

@@ -30,6 +30,7 @@ import 'package:PiliPlus/plugin/pl_player/models/video_fit_type.dart';
 import 'package:PiliPlus/plugin/pl_player/utils/danmaku_options.dart';
 import 'package:PiliPlus/plugin/pl_player/utils/fullscreen.dart';
 import 'package:PiliPlus/services/service_locator.dart';
+import 'package:PiliPlus/services/usage_log.dart';
 import 'package:PiliPlus/utils/accounts.dart';
 import 'package:PiliPlus/utils/android/android_helper.dart';
 import 'package:PiliPlus/utils/android/bindings.g.dart';
@@ -1057,6 +1058,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
           }
 
           this.position.value = posInSeconds;
+          UsageLog.playerPosition(posInSeconds, cid);
 
           makeHeartBeat(posInSeconds);
         }
@@ -1183,6 +1185,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     if (position < Duration.zero) {
       position = Duration.zero;
     }
+    UsageLog.playerSeek(positionInMilliseconds, position.inMilliseconds);
     _heartDuration = position.inSeconds;
 
     if (duration.value != 0) {
@@ -1203,6 +1206,11 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
 
     if (speed == _videoPlayerController?.state.rate) return;
 
+    UsageLog.playerSpeed(
+      _videoPlayerController?.state.rate ?? lastPlaybackSpeed,
+      speed,
+      longPress: longPressStatus.value,
+    );
     await _videoPlayerController?.setRate(speed);
     if (!isLive) _playbackSpeed.value = speed;
     _updatePlaybackState();
@@ -1225,6 +1233,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     controls = !hideControls;
     // repeat为true，将从头播放
     if (repeat) {
+      UsageLog.seekReason('replay');
       await seekTo(Duration.zero, isSeek: false);
     }
 
@@ -1404,6 +1413,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
   }
 
   void onForwardBackward(Duration duration) {
+    UsageLog.seekReason('step');
     seekTo(
       duration.clamp(Duration.zero, videoPlayerController!.state.duration),
       isSeek: false,
@@ -1441,6 +1451,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
   }
 
   void _setFullScreen(bool val) {
+    if (isFullScreen.value != val) UsageLog.playerFullscreen(val);
     isFullScreen.value = val;
     updateSubtitleStyle();
   }

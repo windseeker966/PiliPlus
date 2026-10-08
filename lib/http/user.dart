@@ -14,6 +14,7 @@ import 'package:PiliPlus/models_new/space_setting/data.dart';
 import 'package:PiliPlus/models_new/sub/sub/data.dart';
 import 'package:PiliPlus/models_new/user_real_name/data.dart';
 import 'package:PiliPlus/models_new/video/video_tag/data.dart';
+import 'package:PiliPlus/services/usage_log.dart';
 import 'package:PiliPlus/utils/accounts.dart';
 import 'package:PiliPlus/utils/accounts/account.dart';
 import 'package:PiliPlus/utils/app_sign.dart';
@@ -181,6 +182,7 @@ abstract final class UserHttp {
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );
     if (res.data['code'] == 0) {
+      UsageLog.feedback('later', bvid: bvid, aid: aid);
       SmartDialog.showToast('yeah！稍后再看');
       return const Success(null);
     } else {

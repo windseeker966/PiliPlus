@@ -128,6 +128,7 @@ class VideoPopupMenu extends StatelessWidget {
                               final res = await VideoHttp.feedDislike(
                                 reasonId: r?.id,
                                 feedbackId: f?.id,
+                                reasonName: r?.name ?? f?.name,
                                 id: item.param!,
                                 goto: item.goto!,
                               );

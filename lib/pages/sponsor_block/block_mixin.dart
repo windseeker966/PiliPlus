@@ -13,6 +13,7 @@ import 'package:PiliPlus/utils/duration_utils.dart';
 import 'package:PiliPlus/utils/storage_pref.dart';
 import 'package:easy_debounce/easy_throttle.dart';
 import 'package:flutter/foundation.dart' show kDebugMode;
+import 'package:PiliPlus/services/usage_log.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
 import 'package:material_design_icons_flutter/material_design_icons_flutter.dart';
@@ -258,6 +259,7 @@ mixin BlockMixin on GetxController {
     bool isSeek = true,
   }) async {
     try {
+      UsageLog.seekReason(isSkip ? 'sponsor_skip' : 'sponsor_jump');
       await seekTo(
         Duration(milliseconds: item.segment.$2),
         isSeek: isSeek,

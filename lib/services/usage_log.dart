@@ -1,38 +1,72 @@
-// 使用行为记录：把页面切换、视频观看、列表刷新等事件写入 PiliPlus 自己的 SQLite 数据库
-// （应用支持目录下的 usage_log.db），长期保存。事件先在内存里攒一小批再写入，
+// 使用行为记录：把页面切换、视频曝光与观看、列表刷新、互动反馈等事件写入 PiliPlus 自己的
+// SQLite 数据库（应用支持目录下的 usage_log.db），长期保存。事件先在内存里攒一小批再写入，
 // 写入失败时保留在内存里稍后重试，不影响 PiliPlus 本身。
 //
-// 表结构：events(id, timestamp_ms, event_type, data)，data 为其余字段的 JSON，
-// 可用 json_extract(data, '$.bvid') 等查询。
+// 表结构：
+//   events(id, timestamp_ms, event_type, session_id, data)
+//     data 为其余字段的 JSON，可用 json_extract(data, '$.bvid') 等查询。
+//   impressions(impression_id, session_id, shown_ms, source, request_id, position,
+//               bvid, aid, owner_mid, visible_ms, episodes, max_ratio, clicked_ms, data)
+//     列表里真正显示在屏幕上的视频卡片，每张卡片一行；data 为当时的视频信息快照。
+//
+// 会话：每次冷启动，或在后台超过 30 分钟后回到前台，开始一个新会话（session_id）。
+//
+// 一条完整样本的串联方式：
+//   impressions.impression_id → card_click → page_enter / video_end 中的 impression_id，
+//   list_refresh / list_load_more 的 request_id 对应 impressions.request_id。
 //
 // 转发给「本地时间采集」应用（com.wind.timetracker，见 UsageLogBridge.kt）的接口保留，
 // 目前停用，见 [UsageLog._forwardToTimeTracker]。
 //
 // 事件类型：
-//   app_start / app_foreground / app_background
-//   page_enter / page_leave         页面（路由）进入与离开
+//   app_start / app_foreground / app_background   含网络类型 net、横竖屏 orient
+//   network_change                  网络类型变化
+//   deep_link                       通过外部链接打开（分享链接等）
+//   page_enter / page_leave         页面（路由）进入与离开；点卡片进入的带 impression_id 等归因字段
 //   nav_tab / home_tab              底部导航、首页顶部分区切换
-//   list_refresh / list_load_more   列表下拉刷新（含首次加载）与上滑加载更多
+//   list_refresh / list_load_more   列表下拉刷新（含首次加载）与上滑加载更多，带 request_id
+//   search                          搜索（关键词、类型、排序）
+//   card_click                      点击视频卡片，带 impression_id、来源和位置
 //   video_info                      视频详情加载完成（标题、UP 主、时长等）
 //   player_playing / player_paused / player_completed  播放状态变化
-//   video_end                       一个视频的观看结束（离开、切换），附观看时长汇总
+//   player_seek / player_speed / player_fullscreen      拖动进度、倍速、全屏
+//   video_end                       一个视频的观看结束（离开、切换），附观看汇总
+//   feedback                        点赞、投币、收藏、三连、点踩、不感兴趣、关注、拉黑、稍后再看、分享
 
 import 'dart:async';
+import 'dart:collection' show LinkedHashMap;
 import 'dart:convert';
 import 'dart:io' show File, Platform;
 import 'dart:math' as math;
+import 'dart:ui' show FlutterView, PlatformDispatcher;
 
 import 'package:PiliPlus/grpc/bilibili/app/listener/v1.pb.dart' show DetailItem;
+import 'package:PiliPlus/models/home/rcmd/result.dart';
+import 'package:PiliPlus/models/horizontal_video_model.dart';
+import 'package:PiliPlus/models/model_hot_video_item.dart';
+import 'package:PiliPlus/models/model_rec_video_item.dart';
+import 'package:PiliPlus/models/model_video.dart';
+import 'package:PiliPlus/models/search/result.dart';
 import 'package:PiliPlus/models_new/download/bili_download_entry_info.dart';
 import 'package:PiliPlus/models_new/live/live_room_info_h5/data.dart';
 import 'package:PiliPlus/models_new/pgc/pgc_info_model/episode.dart';
 import 'package:PiliPlus/models_new/video/video_detail/data.dart';
 import 'package:PiliPlus/models_new/video/video_detail/page.dart';
+import 'package:PiliPlus/pages/hot/controller.dart';
+import 'package:PiliPlus/pages/member_video_web/base/controller.dart';
+import 'package:PiliPlus/pages/popular_precious/controller.dart';
+import 'package:PiliPlus/pages/popular_series/controller.dart';
+import 'package:PiliPlus/pages/rank/zone/controller.dart';
+import 'package:PiliPlus/pages/rcmd/controller.dart';
+import 'package:PiliPlus/pages/search_panel/controller.dart';
+import 'package:PiliPlus/pages/video/related/controller.dart';
 import 'package:PiliPlus/plugin/pl_player/controller.dart';
 import 'package:PiliPlus/plugin/pl_player/models/play_status.dart';
 import 'package:PiliPlus/utils/date_utils.dart';
+import 'package:PiliPlus/utils/id_utils.dart';
 import 'package:PiliPlus/utils/path_utils.dart';
 import 'package:PiliPlus/utils/storage_utils.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart' show debugPrint, kDebugMode;
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
@@ -40,29 +74,60 @@ import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:path/path.dart' as path;
 import 'package:sqlite3/sqlite3.dart';
 
+part 'usage_log_impression.dart';
+part 'usage_log_video.dart';
+
 abstract final class UsageLog {
   /// 是否同时把事件转发给「本地时间采集」。目前停用，只保留接口。
   static const _forwardToTimeTracker = false;
   static const _channel = MethodChannel('piliplus/usage_log');
 
   static const _dbName = 'usage_log.db';
-  static const _schemaVersion = 1;
+  static const _schemaVersion = 2;
 
   static const _flushDelay = Duration(seconds: 3);
   static const _retryDelay = Duration(seconds: 30);
   static const _flushBatchSize = 50;
   static const _maxQueue = 2000;
 
+  /// 在后台超过这个时长后回到前台，算作新会话。
+  static const _newSessionAfter = Duration(minutes: 30);
+
+  /// 点击卡片后，这段时间内进入的页面才认为是这次点击打开的。
+  static const _attributionTimeout = Duration(seconds: 15);
+
   static Database? _db;
   static bool get _enabled => _db != null;
 
   static final List<Map<String, Object?>> _queue = [];
+
+  /// 待写入的曝光，按 impression_id 去重，只保留最新状态。
+  static final LinkedHashMap<String, _Impression> _impressionQueue =
+      LinkedHashMap();
   static Timer? _flushTimer;
   static bool _failing = false;
   static AppLifecycleListener? _lifecycleListener;
   static bool _foreground = true;
+  static int? _backgroundSinceMs;
+  static final int _startMs = _now();
+
+  static String _sessionId = _newSessionId();
+  static int _idSeq = 0;
+
+  static String? _network;
 
   static final NavigatorObserver navigatorObserver = _UsageNavigatorObserver();
+
+  static int _now() => DateTime.now().millisecondsSinceEpoch;
+
+  static String _newSessionId() {
+    final random = math.Random().nextInt(36 * 36 * 36 * 36);
+    return '${_now().toRadixString(36)}${random.toRadixString(36).padLeft(4, '0')}';
+  }
+
+  /// 会话内唯一、全局不重复的 ID，用于曝光、列表请求等。
+  static String _nextId(String prefix) =>
+      '$_sessionId-$prefix${(++_idSeq).toRadixString(36)}';
 
   /// 在 runApp 之前、appSupportDirPath 初始化之后调用。
   static void init() {
@@ -76,22 +141,104 @@ abstract final class UsageLog {
     // 用 show/hide 而不是 resume/pause：下拉通知栏等只会进入 inactive，
     // 会触发 resume 但不是真正回到前台。
     _lifecycleListener ??= AppLifecycleListener(
-      onShow: () {
-        if (_foreground) return;
-        _foreground = true;
-        log('app_foreground', const {});
-      },
-      onHide: () {
-        if (_foreground) {
-          _foreground = false;
-          log('app_background', _video.snapshot());
-        }
-        _flushNow();
-      },
+      onShow: _onShow,
+      onHide: _onHide,
       onDetach: _flushNow,
     );
-    log('app_start', const {});
+    _watchNetwork();
+    log('app_start', {
+      'platform': Platform.operatingSystem,
+      ..._context(),
+    });
   }
+
+  static void _onShow() {
+    if (_foreground) return;
+    final now = _now();
+    _video.beforeForegroundChange(now);
+    _foreground = true;
+    final since = _backgroundSinceMs;
+    _backgroundSinceMs = null;
+    final backgroundMs = since == null ? null : now - since;
+    final newSession =
+        backgroundMs != null && backgroundMs >= _newSessionAfter.inMilliseconds;
+    if (newSession) {
+      _sessionId = _newSessionId();
+      _idSeq = 0;
+    }
+    log('app_foreground', {
+      'background_sec': backgroundMs == null ? null : backgroundMs ~/ 1000,
+      if (newSession) 'new_session': true,
+      ..._context(),
+    });
+    _Impressions.onForegroundChange();
+  }
+
+  static void _onHide() {
+    if (_foreground) {
+      final now = _now();
+      _Impressions.endAll(now);
+      _video.beforeForegroundChange(now);
+      _foreground = false;
+      _backgroundSinceMs = now;
+      log('app_background', {..._video.snapshot(), ..._context()});
+      _Impressions.onForegroundChange();
+    }
+    _flushNow();
+  }
+
+  // ---- 上下文 ----
+
+  static Map<String, Object?> _context() => {
+    'net': _network,
+    'orient': _orientation(),
+  };
+
+  static String? _orientation() {
+    final view =
+        PlatformDispatcher.instance.implicitView ??
+        PlatformDispatcher.instance.views.firstOrNull;
+    final size = view?.physicalSize;
+    if (size == null || size.isEmpty) return null;
+    return size.width > size.height ? 'landscape' : 'portrait';
+  }
+
+  static void _watchNetwork() {
+    try {
+      final connectivity = Connectivity();
+      connectivity.checkConnectivity().then(_onNetwork, onError: (_) {});
+      // 与应用同生命周期，只在 init 中调用一次，不需要取消。
+      connectivity.onConnectivityChanged.listen(
+        _onNetwork,
+        onError: (_) {},
+      );
+    } catch (e) {
+      if (kDebugMode) debugPrint('UsageLog network error: $e');
+    }
+  }
+
+  static void _onNetwork(List<ConnectivityResult> results) {
+    final String name;
+    if (results.contains(ConnectivityResult.wifi)) {
+      name = 'wifi';
+    } else if (results.contains(ConnectivityResult.ethernet)) {
+      name = 'ethernet';
+    } else if (results.contains(ConnectivityResult.mobile)) {
+      name = 'mobile';
+    } else if (results.isEmpty || results.contains(ConnectivityResult.none)) {
+      name = 'none';
+    } else {
+      name = results.first.name;
+    }
+    final previous = _network;
+    if (name == previous) return;
+    _network = name;
+    if (previous != null) {
+      log('network_change', {'net': name, 'from': previous});
+    }
+  }
+
+  // ---- 数据库 ----
 
   static Database _openDb(String file) {
     final db = sqlite3.open(file);
@@ -99,23 +246,64 @@ abstract final class UsageLog {
       db
         ..execute('PRAGMA journal_mode = WAL')
         ..execute('PRAGMA synchronous = NORMAL');
-      if (db.userVersion < 1) {
-        db
-          ..execute('''
-            CREATE TABLE IF NOT EXISTS events (
-              id INTEGER PRIMARY KEY,
-              timestamp_ms INTEGER NOT NULL,
-              event_type TEXT NOT NULL,
-              data TEXT NOT NULL
-            ) STRICT''')
-          ..execute(
-            'CREATE INDEX IF NOT EXISTS events_time ON events (timestamp_ms)',
-          )
-          ..execute(
-            'CREATE INDEX IF NOT EXISTS events_type_time '
-            'ON events (event_type, timestamp_ms)',
-          )
-          ..userVersion = _schemaVersion;
+      final version = db.userVersion;
+      if (version < _schemaVersion) {
+        db.execute('BEGIN');
+        try {
+          if (version < 1) {
+            db
+              ..execute('''
+                CREATE TABLE IF NOT EXISTS events (
+                  id INTEGER PRIMARY KEY,
+                  timestamp_ms INTEGER NOT NULL,
+                  event_type TEXT NOT NULL,
+                  data TEXT NOT NULL
+                ) STRICT''')
+              ..execute(
+                'CREATE INDEX IF NOT EXISTS events_time '
+                'ON events (timestamp_ms)',
+              )
+              ..execute(
+                'CREATE INDEX IF NOT EXISTS events_type_time '
+                'ON events (event_type, timestamp_ms)',
+              );
+          }
+          if (version < 2) {
+            db
+              ..execute('ALTER TABLE events ADD COLUMN session_id TEXT')
+              ..execute('''
+                CREATE TABLE IF NOT EXISTS impressions (
+                  impression_id TEXT PRIMARY KEY,
+                  session_id TEXT NOT NULL,
+                  shown_ms INTEGER NOT NULL,
+                  source TEXT NOT NULL,
+                  request_id TEXT,
+                  position INTEGER,
+                  bvid TEXT,
+                  aid INTEGER,
+                  owner_mid INTEGER,
+                  visible_ms INTEGER NOT NULL,
+                  episodes INTEGER NOT NULL,
+                  max_ratio REAL NOT NULL,
+                  clicked_ms INTEGER,
+                  data TEXT NOT NULL
+                ) STRICT''')
+              ..execute(
+                'CREATE INDEX IF NOT EXISTS impressions_time '
+                'ON impressions (shown_ms)',
+              )
+              ..execute(
+                'CREATE INDEX IF NOT EXISTS impressions_bvid '
+                'ON impressions (bvid)',
+              );
+          }
+          db
+            ..userVersion = _schemaVersion
+            ..execute('COMMIT');
+        } catch (_) {
+          db.execute('ROLLBACK');
+          rethrow;
+        }
       }
       return db;
     } catch (_) {
@@ -127,16 +315,33 @@ abstract final class UsageLog {
   static void log(String type, Map<String, Object?> fields) {
     if (!_enabled) return;
     _queue.add({
-      'timestamp_ms': DateTime.now().millisecondsSinceEpoch,
+      'timestamp_ms': _now(),
       'event_type': type,
+      'session_id': _sessionId,
       for (final e in fields.entries)
         if (e.value != null) e.key: e.value,
     });
     if (_queue.length > _maxQueue) {
       _queue.removeRange(0, _queue.length - _maxQueue);
     }
+    _scheduleFlush();
+  }
+
+  static void _queueImpression(_Impression impression) {
+    if (!_enabled) return;
+    _impressionQueue
+      ..remove(impression.id)
+      ..[impression.id] = impression;
+    while (_impressionQueue.length > _maxQueue) {
+      _impressionQueue.remove(_impressionQueue.keys.first);
+    }
+    _scheduleFlush();
+  }
+
+  static void _scheduleFlush() {
     // 写入失败后等重试计时器，不因为事件增多而反复立即重试。
-    if (_queue.length >= _flushBatchSize && !_failing) {
+    if (_queue.length + _impressionQueue.length >= _flushBatchSize &&
+        !_failing) {
       _flushNow();
     } else {
       _flushTimer ??= Timer(_flushDelay, _flushNow);
@@ -151,26 +356,51 @@ abstract final class UsageLog {
 
   static void _flush() {
     final db = _db;
-    if (db == null || _queue.isEmpty) return;
+    if (db == null || (_queue.isEmpty && _impressionQueue.isEmpty)) return;
     final batch = List.of(_queue);
+    final impressions = List.of(_impressionQueue.values);
     try {
       db.execute('BEGIN');
-      final stmt = db.prepare(
-        'INSERT INTO events (timestamp_ms, event_type, data) VALUES (?, ?, ?)',
-      );
-      try {
-        for (final event in batch) {
-          final data = Map.of(event)
-            ..remove('timestamp_ms')
-            ..remove('event_type');
-          stmt.execute([
-            event['timestamp_ms'],
-            event['event_type'],
-            jsonEncode(data),
-          ]);
+      if (batch.isNotEmpty) {
+        final stmt = db.prepare(
+          'INSERT INTO events (timestamp_ms, event_type, session_id, data) '
+          'VALUES (?, ?, ?, ?)',
+        );
+        try {
+          for (final event in batch) {
+            final data = Map.of(event)
+              ..remove('timestamp_ms')
+              ..remove('event_type')
+              ..remove('session_id');
+            stmt.execute([
+              event['timestamp_ms'],
+              event['event_type'],
+              event['session_id'],
+              jsonEncode(data),
+            ]);
+          }
+        } finally {
+          stmt.close();
         }
-      } finally {
-        stmt.close();
+      }
+      if (impressions.isNotEmpty) {
+        final stmt = db.prepare('''
+          INSERT INTO impressions (impression_id, session_id, shown_ms, source,
+            request_id, position, bvid, aid, owner_mid, visible_ms, episodes,
+            max_ratio, clicked_ms, data)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT (impression_id) DO UPDATE SET
+            visible_ms = excluded.visible_ms,
+            episodes = excluded.episodes,
+            max_ratio = excluded.max_ratio,
+            clicked_ms = excluded.clicked_ms''');
+        try {
+          for (final impression in impressions) {
+            stmt.execute(impression.row());
+          }
+        } finally {
+          stmt.close();
+        }
       }
       db.execute('COMMIT');
     } catch (e) {
@@ -184,6 +414,8 @@ abstract final class UsageLog {
     }
     _failing = false;
     _queue.removeRange(0, batch.length);
+    // 写入是同步的，期间不会有新的曝光状态进来。
+    _impressionQueue.clear();
     if (_forwardToTimeTracker) _forward(batch);
   }
 
@@ -231,10 +463,213 @@ abstract final class UsageLog {
   // ---- 列表 ----
 
   /// 列表开始请求数据：isRefresh 为下拉刷新或首次加载，否则为上滑加载更多。
-  static void listQuery(Object controller, bool isRefresh, int page) {
+  /// 返回本次请求的 ID，数据返回后交给 [listResponse]。
+  static String? listQuery(Object controller, bool isRefresh, int page) {
+    if (!_enabled) return null;
+    final requestId = _nextId('r');
+    final source = _listSource(controller);
     log(isRefresh ? 'list_refresh' : 'list_load_more', {
       'list': controller.runtimeType.toString(),
+      'source': source.name,
       'page': page,
+      'request_id': requestId,
+      ...source.context,
+    });
+    if (isRefresh && controller is SearchPanelController) {
+      log('search', {'request_id': requestId, ...source.context});
+    }
+    return requestId;
+  }
+
+  /// 给列表请求返回的视频记下来源，曝光和点击时使用。offset 为这批数据在列表中的起始位置。
+  static void listResponse(
+    Object controller,
+    String? requestId,
+    List<Object?> items,
+    int offset,
+  ) {
+    if (requestId == null) return;
+    final source = _listSource(controller);
+    for (var i = 0; i < items.length; i++) {
+      if (items[i] case final BaseSimpleVideoItemModel item) {
+        _Impressions.tag(
+          item,
+          _ListTag(source.name, requestId, offset + i, source.context),
+        );
+      }
+    }
+  }
+
+  static _ListSource _listSource(Object controller) => switch (controller) {
+    RcmdController(:final appRcmd) => (
+      name: appRcmd ? 'rcmd_app' : 'rcmd_web',
+      context: const {},
+    ),
+    HotController() => (name: 'hot', context: const {}),
+    RelatedController(:final bvid) => (
+      name: 'related',
+      context: {'from_bvid': bvid},
+    ),
+    SearchPanelController(:final keyword, :final searchType, :final order) => (
+      name: 'search',
+      context: {
+        'keyword': keyword,
+        'search_type': searchType.name,
+        if (order.isNotEmpty) 'order': order,
+      },
+    ),
+    ZoneController(:final rid, :final seasonType) => (
+      name: 'rank',
+      context: {'rid': rid, 'season_type': seasonType},
+    ),
+    PopularPreciousController() => (name: 'precious', context: const {}),
+    PopularSeriesController() => (name: 'weekly', context: const {}),
+    BaseVideoWebCtr(:final mid) => (
+      name: 'member_video',
+      context: {'mid': mid.toString()},
+    ),
+    _ => (name: controller.runtimeType.toString(), context: const {}),
+  };
+
+  // ---- 曝光与点击 ----
+
+  /// 包住视频卡片，记录它真正显示在屏幕上的曝光。
+  static Widget impression(
+    BaseSimpleVideoItemModel item, {
+    required Widget child,
+  }) {
+    if (!_enabled) return child;
+    return _ImpressionTracker(item: item, child: child);
+  }
+
+  /// 点击视频卡片。之后打开的视频页和观看汇总会带上这次曝光的 ID。
+  static void cardClick(BaseSimpleVideoItemModel item) {
+    if (!_enabled) return;
+    final impression = _Impressions.clicked(item, _now());
+    log('card_click', {
+      'bvid': impression.bvid,
+      'aid': impression.aid,
+      ...impression.attribution(),
+    });
+    _pendingAttribution = (
+      atMs: _now(),
+      bvid: impression.bvid,
+      fields: impression.attribution(),
+    );
+  }
+
+  /// 通过外部链接打开（分享链接、浏览器跳转等）。
+  static void deepLink(Uri uri) {
+    if (!_enabled) return;
+    final text = uri.toString();
+    final sinceStartMs = _now() - _startMs;
+    log('deep_link', {
+      'uri': text.length > 300 ? text.substring(0, 300) : text,
+      'since_start_sec': sinceStartMs ~/ 1000,
+      if (sinceStartMs < 10000) 'cold_start': true,
+    });
+    _pendingAttribution = (
+      atMs: _now(),
+      bvid: null,
+      fields: const {'source': 'deep_link'},
+    );
+  }
+
+  static ({int atMs, String? bvid, Map<String, Object?> fields})?
+  _pendingAttribution;
+
+  /// 最近点击打开的视频，按 bvid 记下归因，留给之后开始的观看统计使用。
+  static final LinkedHashMap<String, Map<String, Object?>> _attributionByBvid =
+      LinkedHashMap();
+
+  /// 最近一次被页面取走的归因，给拿不到 bvid 的观看（直播等）使用。
+  static ({int atMs, Map<String, Object?> fields})? _recentAttribution;
+
+  /// 开始观看统计时取归因：有 bvid 时按 bvid 取，否则取刚刚点击打开的那次。
+  static Map<String, Object?>? _attributionForVideo(String? bvid) {
+    final recent = _recentAttribution;
+    if (bvid != null) {
+      final fields = _attributionByBvid.remove(bvid);
+      if (fields != null && identical(fields, recent?.fields)) {
+        _recentAttribution = null;
+      }
+      return fields;
+    }
+    if (recent == null ||
+        _now() - recent.atMs > _attributionTimeout.inMilliseconds) {
+      return null;
+    }
+    _recentAttribution = null;
+    return recent.fields;
+  }
+
+  /// 进入页面时取出等待中的点击归因。bvid 为页面参数里的视频，和点击的视频不一致时不使用。
+  static Map<String, Object?>? _takeAttribution(String? bvid) {
+    final pending = _pendingAttribution;
+    if (pending == null) return null;
+    if (_now() - pending.atMs > _attributionTimeout.inMilliseconds) {
+      _pendingAttribution = null;
+      return null;
+    }
+    if (bvid != null && pending.bvid != null && bvid != pending.bvid) {
+      return null;
+    }
+    _pendingAttribution = null;
+    _recentAttribution = (atMs: pending.atMs, fields: pending.fields);
+    if (bvid ?? pending.bvid case final key?) {
+      _attributionByBvid
+        ..remove(key)
+        ..[key] = pending.fields;
+      if (_attributionByBvid.length > 20) {
+        _attributionByBvid.remove(_attributionByBvid.keys.first);
+      }
+    }
+    return pending.fields;
+  }
+
+  // ---- 互动反馈 ----
+
+  /// 点赞、投币、收藏等操作成功后调用。action 见文件开头的说明。
+  static void feedback(
+    String action, {
+    String? bvid,
+    Object? aid,
+    Object? mid,
+    Map<String, Object?> extra = const {},
+  }) {
+    if (!_enabled) return;
+    if (bvid == null) {
+      final aidInt = switch (aid) {
+        final int value => value,
+        final String value => int.tryParse(value),
+        _ => null,
+      };
+      if (aidInt != null && aidInt > 0) {
+        try {
+          bvid = IdUtils.av2bv(aidInt);
+        } catch (_) {}
+      }
+    }
+    final session = _video.session;
+    final inSession = session != null && bvid != null && session.bvid == bvid;
+    final Object? impressionId;
+    if (inSession) {
+      impressionId = session.attribution?['impression_id'];
+    } else {
+      impressionId = bvid == null ? null : _Impressions.lastIdForBvid(bvid);
+    }
+    log('feedback', {
+      'action': action,
+      'bvid': bvid,
+      'aid': aid,
+      'mid': mid,
+      if (inSession) ...{
+        'position_sec': session.lastPositionSec,
+        'played_sec': session.playedSec(_now()),
+      },
+      if (session != null && !inSession) 'playing_bvid': session.bvid,
+      'impression_id': impressionId,
+      ...extra,
     });
   }
 
@@ -263,6 +698,33 @@ abstract final class UsageLog {
   }) {
     if (!_enabled) return;
     _video.onState(status, position, isLive: isLive, speed: speed);
+  }
+
+  /// 播放位置每变化一秒调用一次，用来统计实际看过的内容。
+  static void playerPosition(int positionSec, int? cid) {
+    if (!_enabled) return;
+    _video.onPosition(positionSec, cid);
+  }
+
+  /// 标记下一次跳转进度的原因（自动跳过片段、重播等），未标记的视为手动拖动。
+  static void seekReason(String reason) {
+    if (!_enabled) return;
+    _video.seekReason = reason;
+  }
+
+  static void playerSeek(int fromMs, int toMs) {
+    if (!_enabled) return;
+    _video.onSeek(fromMs, toMs);
+  }
+
+  static void playerSpeed(double from, double to, {bool longPress = false}) {
+    if (!_enabled) return;
+    _video.onSpeed(from, to, longPress: longPress);
+  }
+
+  static void playerFullscreen(bool fullscreen) {
+    if (!_enabled) return;
+    _video.onFullscreen(fullscreen);
   }
 
   static Map<String, Object?>? _videoInfoFields(
@@ -352,137 +814,6 @@ abstract final class UsageLog {
   }
 }
 
-/// 以 cid 区分「当前在看的视频」，统计每个视频实际播放的时长和看到的位置。
-class _VideoTracker {
-  final Map<int, Map<String, Object?>> _infoByCid = {};
-  _VideoSession? _session;
-  String? _lastStatus;
-
-  void onInfo(int cid, Map<String, Object?> info) {
-    _infoByCid.remove(cid);
-    _infoByCid[cid] = info;
-    if (_infoByCid.length > 50) _infoByCid.remove(_infoByCid.keys.first);
-    final session = _session;
-    if (session != null && session.cid == cid) {
-      session.info = info;
-    } else {
-      end('switch');
-      _session = _VideoSession(cid, info);
-    }
-  }
-
-  void onState(
-    PlayerStatus status,
-    Duration position, {
-    required bool isLive,
-    required double speed,
-  }) {
-    final ctr = PlPlayerController.instance;
-    final cid = ctr?.cid;
-    final now = DateTime.now().millisecondsSinceEpoch;
-    final playing = status == PlayerStatus.playing;
-
-    // 只在开始播放时切换，避免旧视频的暂停事件晚到时把新视频的统计切走。
-    if (playing && cid != null && _session?.cid != cid) {
-      end('switch');
-      _session = _VideoSession(cid, _infoByCid[cid] ?? {'cid': cid});
-    }
-    final session = _session;
-    final posSec = position.inSeconds;
-    if (session != null && (cid == null || session.cid == cid)) {
-      session.lastPositionSec = posSec;
-      session.maxPositionSec = math.max(session.maxPositionSec, posSec);
-      _samplePosition(session);
-      if (playing) {
-        session.playingSinceMs ??= now;
-      } else {
-        session.stopPlaying(now);
-      }
-    }
-
-    final name = status.name;
-    if (name == _lastStatus) return;
-    _lastStatus = name;
-    String? bvid;
-    try {
-      bvid = ctr?.bvid;
-    } catch (_) {}
-    UsageLog.log('player_$name', {
-      'bvid': bvid,
-      'cid': cid,
-      'position_sec': posSec,
-      'speed': speed,
-      if (isLive) 'live': true,
-    });
-  }
-
-  /// 播放器只在状态变化（播放、暂停、缓冲）时上报位置；汇总前直接读一次播放器的当前位置。
-  void _samplePosition(_VideoSession session) {
-    final ctr = PlPlayerController.instance;
-    if (ctr == null || ctr.cid != session.cid) return;
-    final pos = ctr.position.value;
-    session.lastPositionSec = pos;
-    session.maxPositionSec = math.max(session.maxPositionSec, pos);
-  }
-
-  /// 当前视频的进度快照（不结束统计）。
-  Map<String, Object?> snapshot() {
-    final session = _session;
-    if (session == null) return const {};
-    _samplePosition(session);
-    return {'video': session.summary(DateTime.now().millisecondsSinceEpoch)};
-  }
-
-  void end(String reason) {
-    final session = _session;
-    if (session == null) return;
-    _session = null;
-    _lastStatus = null;
-    _samplePosition(session);
-    final now = DateTime.now().millisecondsSinceEpoch;
-    session.stopPlaying(now);
-    UsageLog.log('video_end', {...session.summary(now), 'reason': reason});
-  }
-}
-
-class _VideoSession {
-  _VideoSession(this.cid, this.info)
-    : startMs = DateTime.now().millisecondsSinceEpoch;
-
-  final int cid;
-  Map<String, Object?> info;
-  final int startMs;
-  int playedMs = 0;
-  int? playingSinceMs;
-  int lastPositionSec = 0;
-  int maxPositionSec = 0;
-
-  void stopPlaying(int now) {
-    final since = playingSinceMs;
-    if (since != null) {
-      playedMs += math.max(0, now - since);
-      playingSinceMs = null;
-    }
-  }
-
-  Map<String, Object?> summary(int now) {
-    final since = playingSinceMs;
-    final played = playedMs + (since == null ? 0 : math.max(0, now - since));
-    return {
-      'kind': info['kind'],
-      'bvid': info['bvid'],
-      'cid': cid,
-      'title': info['title'],
-      'owner': info['owner'],
-      'duration_sec': info['duration_sec'],
-      'opened_sec': (now - startMs) ~/ 1000,
-      'played_sec': played ~/ 1000,
-      'last_position_sec': lastPositionSec,
-      'max_position_sec': maxPositionSec,
-    };
-  }
-}
-
 class _UsageNavigatorObserver extends NavigatorObserver {
   static const _argKeys = {
     'bvid',
@@ -499,6 +830,9 @@ class _UsageNavigatorObserver extends NavigatorObserver {
     'sourceType',
     'isVertical',
   };
+
+  /// 离开这些页面时结束当前视频的观看统计。
+  static const _playerPages = {'/videoV', '/liveRoom'};
 
   /// Get.to(() => ...) 以闭包的静态返回类型作路由名，返回类型不具体时只得到这些名字；
   /// Navigator.push 未设置 settings 时路由名为空。这两种情况从组件树里取实际页面。
@@ -576,11 +910,17 @@ class _UsageNavigatorObserver extends NavigatorObserver {
   }
 
   void _logEnter(Route<dynamic> route, Route<dynamic>? previous, String how) {
+    final args = _args(route);
+    final bvid = args['bvid'];
+    final attribution = UsageLog._takeAttribution(
+      bvid is String ? bvid : null,
+    );
     UsageLog.log('page_enter', {
       'page': _name(route),
       'from': _name(previous),
       'how': how,
-      ..._args(route),
+      ...args,
+      ...?attribution,
     });
   }
 
@@ -588,7 +928,7 @@ class _UsageNavigatorObserver extends NavigatorObserver {
     if (route is! PageRoute) return;
     final page = _name(route);
     UsageLog.log('page_leave', {'page': page, 'to': _name(next), 'how': how});
-    if (page == '/videoV') UsageLog._video.end('leave');
+    if (_playerPages.contains(page)) UsageLog._video.end('leave');
   }
 
   @override
