@@ -60,6 +60,7 @@ abstract final class UsageLog {
   static Timer? _flushTimer;
   static bool _failing = false;
   static AppLifecycleListener? _lifecycleListener;
+  static bool _foreground = true;
 
   static final NavigatorObserver navigatorObserver = _UsageNavigatorObserver();
 
@@ -72,13 +73,21 @@ abstract final class UsageLog {
       if (kDebugMode) debugPrint('UsageLog init error: $e');
       return;
     }
+    // 用 show/hide 而不是 resume/pause：下拉通知栏等只会进入 inactive，
+    // 会触发 resume 但不是真正回到前台。
     _lifecycleListener ??= AppLifecycleListener(
-      onResume: () => log('app_foreground', const {}),
-      onPause: () {
-        log('app_background', _video.snapshot());
+      onShow: () {
+        if (_foreground) return;
+        _foreground = true;
+        log('app_foreground', const {});
+      },
+      onHide: () {
+        if (_foreground) {
+          _foreground = false;
+          log('app_background', _video.snapshot());
+        }
         _flushNow();
       },
-      onHide: _flushNow,
       onDetach: _flushNow,
     );
     log('app_start', const {});
@@ -491,11 +500,43 @@ class _UsageNavigatorObserver extends NavigatorObserver {
     'isVertical',
   };
 
+  /// Get.to(() => ...) 以闭包的静态返回类型作路由名，返回类型不具体时只得到这些名字；
+  /// Navigator.push 未设置 settings 时路由名为空。这两种情况从组件树里取实际页面。
+  static const _genericNames = {
+    '/Widget',
+    '/StatelessWidget',
+    '/StatefulWidget',
+  };
+  static final _resolvedNames = Expando<String>('usageLogRouteName');
+
   static String? _name(Route<dynamic>? route) {
-    final name = route?.settings.name;
+    if (route == null) return null;
+    final resolved = _resolvedNames[route];
+    if (resolved != null) return resolved;
+    final name = route.settings.name;
     if (name == null) return null;
     final query = name.indexOf('?');
     return query < 0 ? name : name.substring(0, query);
+  }
+
+  static bool _needsResolve(String? name) =>
+      name == null || _genericNames.contains(name);
+
+  /// 路由内容为 RepaintBoundary → Builder → Semantics → 页面，跳过这几层取页面类型。
+  static String? _resolveName(ModalRoute<dynamic> route) {
+    Element? element = route.subtreeContext as Element?;
+    for (var depth = 0; element != null && depth < 6; depth++) {
+      final widget = element.widget;
+      if (widget is! RepaintBoundary &&
+          widget is! Builder &&
+          widget is! Semantics) {
+        return '/${widget.runtimeType}';
+      }
+      Element? child;
+      element.visitChildren((e) => child ??= e);
+      element = child;
+    }
+    return null;
   }
 
   static Map<String, Object?> _args(Route<dynamic> route) {
@@ -522,6 +563,19 @@ class _UsageNavigatorObserver extends NavigatorObserver {
 
   void _enter(Route<dynamic> route, Route<dynamic>? previous, String how) {
     if (route is! PageRoute) return;
+    if (_needsResolve(_name(route))) {
+      // 页面要在下一帧构建后才能从组件树里取到。
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final resolved = _resolveName(route);
+        if (resolved != null) _resolvedNames[route] = resolved;
+        _logEnter(route, previous, how);
+      });
+    } else {
+      _logEnter(route, previous, how);
+    }
+  }
+
+  void _logEnter(Route<dynamic> route, Route<dynamic>? previous, String how) {
     UsageLog.log('page_enter', {
       'page': _name(route),
       'from': _name(previous),
