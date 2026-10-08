@@ -1,5 +1,6 @@
 import 'package:PiliPlus/http/loading_state.dart';
 import 'package:PiliPlus/pages/common/common_controller.dart';
+import 'package:PiliPlus/services/usage_log.dart';
 import 'package:get/get.dart';
 
 abstract class CommonListController<R, T> extends CommonController<R, T> {
@@ -23,6 +24,7 @@ abstract class CommonListController<R, T> extends CommonController<R, T> {
   Future<void> queryData([bool isRefresh = true]) async {
     if (isLoading || (!isRefresh && isEnd)) return;
     isLoading = true;
+    UsageLog.listQuery(this, isRefresh, page);
     final LoadingState<R> res = await customGetData();
     if (res case Success(:final response)) {
       if (!customHandleResponse(isRefresh, res)) {

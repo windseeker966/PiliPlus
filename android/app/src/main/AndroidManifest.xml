@@ -21,6 +21,11 @@
         </intent>
     </queries>
 
+    <!-- UsageLog：把使用行为发给「本地时间采集」应用。 -->
+    <queries>
+        <provider android:authorities="com.wind.timetracker.events" />
+    </queries>
+
     <queries>
         <!-- If your app checks for http support -->
         <intent>

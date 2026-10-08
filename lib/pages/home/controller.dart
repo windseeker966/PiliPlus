@@ -7,6 +7,7 @@ import 'package:PiliPlus/models/common/home_tab_type.dart';
 import 'package:PiliPlus/pages/common/common_controller.dart';
 import 'package:PiliPlus/pages/main/controller.dart';
 import 'package:PiliPlus/services/account_service.dart';
+import 'package:PiliPlus/services/usage_log.dart';
 import 'package:PiliPlus/utils/storage.dart';
 import 'package:PiliPlus/utils/storage_key.dart';
 import 'package:PiliPlus/utils/storage_pref.dart';
@@ -77,6 +78,14 @@ class HomeController extends GetxController
       length: this.tabs.length,
       vsync: this,
     );
+    var loggedIndex = tabController.index;
+    tabController.addListener(() {
+      final index = tabController.index;
+      if (!tabController.indexIsChanging && index != loggedIndex) {
+        loggedIndex = index;
+        UsageLog.log('home_tab', {'tab': this.tabs[index].name});
+      }
+    });
   }
 
   @override
