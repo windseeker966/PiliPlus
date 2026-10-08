@@ -1,6 +1,12 @@
-// 使用行为记录：把页面切换、视频观看、列表刷新等事件发给本地的「本地时间采集」应用
-// （com.wind.timetracker），由它写入自己的数据库。只在 Android 上工作，
-// 对方未安装或调用失败时事件暂存在内存里，之后重试，不影响 PiliPlus 本身。
+// 使用行为记录：把页面切换、视频观看、列表刷新等事件写入 PiliPlus 自己的 SQLite 数据库
+// （应用支持目录下的 usage_log.db），长期保存。事件先在内存里攒一小批再写入，
+// 写入失败时保留在内存里稍后重试，不影响 PiliPlus 本身。
+//
+// 表结构：events(id, timestamp_ms, event_type, data)，data 为其余字段的 JSON，
+// 可用 json_extract(data, '$.bvid') 等查询。
+//
+// 转发给「本地时间采集」应用（com.wind.timetracker，见 UsageLogBridge.kt）的接口保留，
+// 目前停用，见 [UsageLog._forwardToTimeTracker]。
 //
 // 事件类型：
 //   app_start / app_foreground / app_background
@@ -24,41 +30,90 @@ import 'package:PiliPlus/models_new/video/video_detail/data.dart';
 import 'package:PiliPlus/models_new/video/video_detail/page.dart';
 import 'package:PiliPlus/plugin/pl_player/controller.dart';
 import 'package:PiliPlus/plugin/pl_player/models/play_status.dart';
+import 'package:PiliPlus/utils/path_utils.dart';
+import 'package:flutter/foundation.dart' show debugPrint, kDebugMode;
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
+import 'package:path/path.dart' as path;
+import 'package:sqlite3/sqlite3.dart';
 
 abstract final class UsageLog {
+  /// 是否同时把事件转发给「本地时间采集」。目前停用，只保留接口。
+  static const _forwardToTimeTracker = false;
   static const _channel = MethodChannel('piliplus/usage_log');
-  static final bool _enabled = Platform.isAndroid;
+
+  static const _dbName = 'usage_log.db';
+  static const _schemaVersion = 1;
 
   static const _flushDelay = Duration(seconds: 3);
   static const _retryDelay = Duration(seconds: 30);
   static const _flushBatchSize = 50;
   static const _maxQueue = 2000;
 
+  static Database? _db;
+  static bool get _enabled => _db != null;
+
   static final List<Map<String, Object?>> _queue = [];
   static Timer? _flushTimer;
-  static bool _flushing = false;
-  static bool _unsupported = false;
+  static bool _failing = false;
   static AppLifecycleListener? _lifecycleListener;
 
   static final NavigatorObserver navigatorObserver = _UsageNavigatorObserver();
 
-  /// 在 runApp 之前调用。
+  /// 在 runApp 之前、appSupportDirPath 初始化之后调用。
   static void init() {
-    if (!_enabled) return;
+    if (_db != null) return;
+    try {
+      _db = _openDb(path.join(appSupportDirPath, _dbName));
+    } catch (e) {
+      if (kDebugMode) debugPrint('UsageLog init error: $e');
+      return;
+    }
     _lifecycleListener ??= AppLifecycleListener(
       onResume: () => log('app_foreground', const {}),
       onPause: () {
         log('app_background', _video.snapshot());
         _flushNow();
       },
+      onHide: _flushNow,
+      onDetach: _flushNow,
     );
     log('app_start', const {});
   }
 
+  static Database _openDb(String file) {
+    final db = sqlite3.open(file);
+    try {
+      db
+        ..execute('PRAGMA journal_mode = WAL')
+        ..execute('PRAGMA synchronous = NORMAL');
+      if (db.userVersion < 1) {
+        db
+          ..execute('''
+            CREATE TABLE IF NOT EXISTS events (
+              id INTEGER PRIMARY KEY,
+              timestamp_ms INTEGER NOT NULL,
+              event_type TEXT NOT NULL,
+              data TEXT NOT NULL
+            ) STRICT''')
+          ..execute(
+            'CREATE INDEX IF NOT EXISTS events_time ON events (timestamp_ms)',
+          )
+          ..execute(
+            'CREATE INDEX IF NOT EXISTS events_type_time '
+            'ON events (event_type, timestamp_ms)',
+          )
+          ..userVersion = _schemaVersion;
+      }
+      return db;
+    } catch (_) {
+      db.close();
+      rethrow;
+    }
+  }
+
   static void log(String type, Map<String, Object?> fields) {
-    if (!_enabled || _unsupported) return;
+    if (!_enabled) return;
     _queue.add({
       'timestamp_ms': DateTime.now().millisecondsSinceEpoch,
       'event_type': type,
@@ -68,7 +123,8 @@ abstract final class UsageLog {
     if (_queue.length > _maxQueue) {
       _queue.removeRange(0, _queue.length - _maxQueue);
     }
-    if (_queue.length >= _flushBatchSize) {
+    // 写入失败后等重试计时器，不因为事件增多而反复立即重试。
+    if (_queue.length >= _flushBatchSize && !_failing) {
       _flushNow();
     } else {
       _flushTimer ??= Timer(_flushDelay, _flushNow);
@@ -81,24 +137,52 @@ abstract final class UsageLog {
     _flush();
   }
 
-  static Future<void> _flush() async {
-    if (_flushing || _queue.isEmpty || _unsupported) return;
-    _flushing = true;
-    final batch = List.of(_queue.take(500));
+  static void _flush() {
+    final db = _db;
+    if (db == null || _queue.isEmpty) return;
+    final batch = List.of(_queue);
+    try {
+      db.execute('BEGIN');
+      final stmt = db.prepare(
+        'INSERT INTO events (timestamp_ms, event_type, data) VALUES (?, ?, ?)',
+      );
+      try {
+        for (final event in batch) {
+          final data = Map.of(event)
+            ..remove('timestamp_ms')
+            ..remove('event_type');
+          stmt.execute([
+            event['timestamp_ms'],
+            event['event_type'],
+            jsonEncode(data),
+          ]);
+        }
+      } finally {
+        stmt.close();
+      }
+      db.execute('COMMIT');
+    } catch (e) {
+      if (kDebugMode) debugPrint('UsageLog write error: $e');
+      try {
+        db.execute('ROLLBACK');
+      } catch (_) {}
+      _failing = true;
+      _flushTimer ??= Timer(_retryDelay, _flushNow);
+      return;
+    }
+    _failing = false;
+    _queue.removeRange(0, batch.length);
+    if (_forwardToTimeTracker) _forward(batch);
+  }
+
+  /// 转发给「本地时间采集」（Android，UsageLogBridge.kt）。数据库才是权威记录，
+  /// 转发失败的事件直接丢弃，不重试。
+  static Future<void> _forward(List<Map<String, Object?>> batch) async {
+    if (!Platform.isAndroid) return;
     try {
       await _channel.invokeMethod<int>('send', jsonEncode(batch));
-      _queue.removeRange(0, batch.length);
-    } on MissingPluginException {
-      _unsupported = true;
-      _queue.clear();
-    } catch (_) {
-      // 「本地时间采集」未安装或暂不可用：保留队列，稍后重试。
-      _flushTimer ??= Timer(_retryDelay, _flushNow);
-    } finally {
-      _flushing = false;
-    }
-    if (_queue.isNotEmpty && _flushTimer == null) {
-      _flushTimer = Timer(_flushDelay, _flushNow);
+    } catch (e) {
+      if (kDebugMode) debugPrint('UsageLog forward error: $e');
     }
   }
 
