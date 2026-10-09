@@ -9,8 +9,17 @@
 #   https://github.com/flutter/flutter.git .toolchain/flutter
 #
 # 用法：tool/build_android_local.sh            输出 build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
-# 可用环境变量覆盖：FLUTTER_ROOT、PUB_CACHE、JAVA_HOME、ANDROID_HOME
+#       BUILD_MODE=profile tool/build_android_local.sh
+#                                              输出 app-arm64-v8a-profile.apk，包名与正式版相同（覆盖安装、保留数据）；
+#                                              性能接近 release，且可用 adb shell run-as 读取应用数据
+# 可用环境变量覆盖：BUILD_MODE（release / profile，默认 release）、FLUTTER_ROOT、PUB_CACHE、JAVA_HOME、ANDROID_HOME
 set -euo pipefail
+
+BUILD_MODE="${BUILD_MODE:-release}"
+case "$BUILD_MODE" in
+  release | profile) ;;
+  *) echo "BUILD_MODE 只能是 release 或 profile：$BUILD_MODE" >&2; exit 1 ;;
+esac
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 export FLUTTER_ROOT="${FLUTTER_ROOT:-$REPO/.toolchain/flutter}"
@@ -58,8 +67,8 @@ version_code="$(git rev-list --count HEAD)"
 commit_hash="$(git rev-parse HEAD)"
 version_name="$version_name-${commit_hash:0:9}"
 
-echo "==> 编译 $version_name+$version_code"
-flutter build apk --release --no-pub \
+echo "==> 编译 $version_name+$version_code（$BUILD_MODE）"
+flutter build apk "--$BUILD_MODE" --no-pub \
   --target-platform android-arm64 --split-per-abi \
   --build-name "$version_name" --build-number "$version_code" \
   --dart-define "pili.name=$version_name" \
@@ -67,4 +76,4 @@ flutter build apk --release --no-pub \
   --dart-define "pili.hash=$commit_hash" \
   --dart-define "pili.time=$(date +%s)"
 
-ls -la "$REPO/build/app/outputs/flutter-apk/"*arm64*release.apk
+ls -la "$REPO/build/app/outputs/flutter-apk/"*arm64*"$BUILD_MODE".apk

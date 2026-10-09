@@ -327,8 +327,10 @@ class _ImpressionTrackerState extends State<_ImpressionTracker> {
     final screen = Offset.zero & (view.physicalSize / view.devicePixelRatio);
     final box = context.findRenderObject();
     if (box is! RenderBox || !box.attached || !box.hasSize) return 0;
+    // 保活但不显示的组件（如切走的 Tab 页）变换矩阵为零，算出的矩形各边都是 NaN，
+    // 而 NaN <= 0 为 false，要单独排除。
     final rect = _globalRect(box);
-    if (rect.width <= 0 || rect.height <= 0) return 0;
+    if (!rect.isFinite || rect.width <= 0 || rect.height <= 0) return 0;
     var clip = screen;
     final scrollable = _scrollable;
     if (scrollable != null && scrollable.mounted) {
@@ -338,7 +340,9 @@ class _ImpressionTrackerState extends State<_ImpressionTracker> {
       }
     }
     final visible = rect.intersect(clip);
-    if (visible.width <= 0 || visible.height <= 0) return 0;
+    if (!visible.isFinite || visible.width <= 0 || visible.height <= 0) {
+      return 0;
+    }
     return (visible.width * visible.height) / (rect.width * rect.height);
   }
 

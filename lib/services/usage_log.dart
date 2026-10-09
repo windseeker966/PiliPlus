@@ -32,6 +32,7 @@
 //   player_seek / player_speed / player_fullscreen      拖动进度、倍速、全屏
 //   video_end                       一个视频的观看结束（离开、切换），附观看汇总
 //   feedback                        点赞、投币、收藏、三连、点踩、不感兴趣、关注、拉黑、稍后再看、分享
+//   log_error                       有记录写不进数据库而被丢弃（错误信息和丢弃条数）
 
 import 'dart:async';
 import 'dart:collection' show LinkedHashMap;
@@ -360,7 +361,113 @@ abstract final class UsageLog {
     final batch = List.of(_queue);
     final impressions = List.of(_impressionQueue.values);
     try {
-      db.execute('BEGIN');
+      _write(db, batch, impressions);
+    } catch (e) {
+      if (_isBadRecord(e)) {
+        _writeEach(db, batch, impressions);
+      } else {
+        _onWriteError(e);
+      }
+      return;
+    }
+    _failing = false;
+    _queue.removeRange(0, batch.length);
+    // 写入是同步的，期间不会有新的曝光状态进来。
+    _impressionQueue.clear();
+    if (_forwardToTimeTracker) _forward(batch);
+  }
+
+  /// 记录本身写不进去（违反约束、无法编码等），重试也不会成功。
+  static bool _isBadRecord(Object e) =>
+      e is Error ||
+      (e is SqliteException &&
+          const {
+            18, // SQLITE_TOOBIG
+            19, // SQLITE_CONSTRAINT
+            20, // SQLITE_MISMATCH
+            25, // SQLITE_RANGE
+          }.contains(e.resultCode));
+
+  /// 整批中有坏记录时逐条写入，丢掉坏的并记一条 log_error，免得它卡住之后的所有记录。
+  static void _writeEach(
+    Database db,
+    List<Map<String, Object?>> batch,
+    List<_Impression> impressions,
+  ) {
+    final written = <Map<String, Object?>>[];
+    final errors = <String>{};
+    var droppedEvents = 0;
+    var droppedImpressions = 0;
+    var doneEvents = 0;
+    Object? fatal;
+    try {
+      for (final event in batch) {
+        if (_writeOne(db, [event], const []) case final e?) {
+          droppedEvents++;
+          errors.add('${event['event_type']}: $e');
+        } else {
+          written.add(event);
+        }
+        doneEvents++;
+      }
+      for (final impression in impressions) {
+        if (_writeOne(db, const [], [impression]) case final e?) {
+          droppedImpressions++;
+          errors.add('impression: $e');
+        }
+        _impressionQueue.remove(impression.id);
+      }
+    } catch (e) {
+      fatal = e;
+    }
+    _queue.removeRange(0, doneEvents);
+    if (_forwardToTimeTracker && written.isNotEmpty) _forward(written);
+    if (errors.isNotEmpty) {
+      final error = errors.join('\n');
+      debugPrint('UsageLog dropped records: $error');
+      log('log_error', {
+        'error': error.length > 1000 ? error.substring(0, 1000) : error,
+        'dropped_events': droppedEvents,
+        'dropped_impressions': droppedImpressions,
+      });
+    }
+    if (fatal != null) {
+      _onWriteError(fatal);
+    } else {
+      _failing = false;
+    }
+  }
+
+  /// 单独写入。记录本身有问题时返回错误，其他错误照常抛出。
+  static Object? _writeOne(
+    Database db,
+    List<Map<String, Object?>> events,
+    List<_Impression> impressions,
+  ) {
+    try {
+      _write(db, events, impressions);
+      return null;
+    } catch (e) {
+      if (_isBadRecord(e)) return e;
+      rethrow;
+    }
+  }
+
+  /// 磁盘满、数据库被锁等暂时性错误：保留全部记录，稍后重试。
+  static void _onWriteError(Object e) {
+    debugPrint('UsageLog write error: $e');
+    _failing = true;
+    _flushTimer ??= Timer(_retryDelay, _flushNow);
+  }
+
+  /// 在一个事务里写入，失败时回滚并抛出。
+  static void _write(
+    Database db,
+    List<Map<String, Object?>> batch,
+    List<_Impression> impressions,
+  ) {
+    db.execute('BEGIN');
+    try {
       if (batch.isNotEmpty) {
         final stmt = db.prepare(
           'INSERT INTO events (timestamp_ms, event_type, session_id, data) '
@@ -403,20 +510,12 @@ abstract final class UsageLog {
         }
       }
       db.execute('COMMIT');
-    } catch (e) {
-      if (kDebugMode) debugPrint('UsageLog write error: $e');
+    } catch (_) {
       try {
         db.execute('ROLLBACK');
       } catch (_) {}
-      _failing = true;
-      _flushTimer ??= Timer(_retryDelay, _flushNow);
-      return;
+      rethrow;
     }
-    _failing = false;
-    _queue.removeRange(0, batch.length);
-    // 写入是同步的，期间不会有新的曝光状态进来。
-    _impressionQueue.clear();
-    if (_forwardToTimeTracker) _forward(batch);
   }
 
   /// 把全部记录导出为一个独立的 SQLite 数据库文件，由用户选择保存位置。
