@@ -882,12 +882,29 @@ abstract final class UsageLog {
           'owner': data.anchorInfo?.baseInfo?.uname,
         };
       case Part():
+        // 视频页内切换分 P，只给出分 P 本身。从播放器取 bvid，
+        // 再用之前加载的整个视频的信息补全，与首次加载多 P 视频时的格式一致。
+        String? bvid;
+        try {
+          bvid = PlPlayerController.instance?.bvid;
+        } catch (_) {}
+        final parent = bvid == null ? null : _video.ugcInfo(bvid);
+        if (parent == null) {
+          return {
+            'kind': 'part',
+            'bvid': bvid,
+            'cid': cid,
+            'title': data.part,
+            'owner': artist,
+            'duration_sec': data.duration,
+          };
+        }
         return {
-          'kind': 'part',
+          ...parent,
           'cid': cid,
-          'title': data.part,
-          'owner': artist,
           'duration_sec': data.duration,
+          'part': data.part,
+          'part_index': data.page,
         };
       case DetailItem(:final arc):
         return {

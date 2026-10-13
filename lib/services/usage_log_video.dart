@@ -23,9 +23,29 @@ class _VideoTracker {
         ..info = info
         ..attach();
     } else {
-      end('switch');
-      this.session = _VideoSession(cid, info)..attach();
+      _start(cid, info);
     }
+  }
+
+  /// 最近加载的这个视频的整体信息（不是单个分 P），用来补全切换分 P 时的信息。
+  Map<String, Object?>? ugcInfo(String bvid) {
+    for (final info in _infoByCid.values.toList().reversed) {
+      if (info['kind'] == 'ugc' && info['bvid'] == bvid) return info;
+    }
+    return null;
+  }
+
+  /// 结束当前统计，开始新的。同一视频内切换分 P 时沿用之前的归因：
+  /// 比如点开后续播跳到上次看的分 P，真正的观看都在后面的分 P 里。
+  void _start(int cid, Map<String, Object?> info) {
+    final previous = session;
+    end('switch');
+    final bvid = info['bvid'];
+    session = _VideoSession(cid, info)
+      ..attribution = bvid != null && previous?.bvid == bvid
+          ? previous!.attribution
+          : null
+      ..attach();
   }
 
   /// 当前播放器播放的是 [session] 时返回它。
@@ -48,8 +68,7 @@ class _VideoTracker {
 
     // 只在开始播放时切换，避免旧视频的暂停事件晚到时把新视频的统计切走。
     if (playing && cid != null && session?.cid != cid) {
-      end('switch');
-      session = _VideoSession(cid, _infoByCid[cid] ?? {'cid': cid})..attach();
+      _start(cid, _infoByCid[cid] ?? {'cid': cid});
     }
     final current = _current(cid);
     final posSec = position.inSeconds;
