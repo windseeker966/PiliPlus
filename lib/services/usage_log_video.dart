@@ -13,7 +13,13 @@ class _VideoTracker {
   set seekReason(String reason) =>
       _seekReason = (reason: reason, atMs: UsageLog._now());
 
+  /// 最近加载的标签。标签单独请求，可能比详情先到。
+  final LinkedHashMap<String, List<String>> _tagsByBvid = LinkedHashMap();
+
   void onInfo(int cid, Map<String, Object?> info) {
+    if (info['bvid'] case final String bvid) {
+      if (_tagsByBvid[bvid] case final tags?) info['tags'] = tags;
+    }
     _infoByCid.remove(cid);
     _infoByCid[cid] = info;
     if (_infoByCid.length > 50) _infoByCid.remove(_infoByCid.keys.first);
@@ -27,6 +33,18 @@ class _VideoTracker {
     }
   }
 
+  void onTags(String bvid, List<String> tags) {
+    _tagsByBvid
+      ..remove(bvid)
+      ..[bvid] = tags;
+    if (_tagsByBvid.length > 20) _tagsByBvid.remove(_tagsByBvid.keys.first);
+    for (final info in _infoByCid.values) {
+      if (info['bvid'] == bvid) info['tags'] = tags;
+    }
+    final session = this.session;
+    if (session != null && session.bvid == bvid) session.info['tags'] = tags;
+  }
+
   /// 最近加载的这个视频的整体信息（不是单个分 P），用来补全切换分 P 时的信息。
   Map<String, Object?>? ugcInfo(String bvid) {
     for (final info in _infoByCid.values.toList().reversed) {
@@ -38,14 +56,17 @@ class _VideoTracker {
   /// 结束当前统计，开始新的。同一视频内切换分 P 时沿用之前的归因：
   /// 比如点开后续播跳到上次看的分 P，真正的观看都在后面的分 P 里。
   void _start(int cid, Map<String, Object?> info) {
-    final previous = session;
+    final previous = this.session;
     end('switch');
     final bvid = info['bvid'];
-    session = _VideoSession(cid, info)
-      ..attribution = bvid != null && previous?.bvid == bvid
-          ? previous!.attribution
-          : null
+    final sameVideo = bvid != null && previous?.bvid == bvid;
+    final session = this.session = _VideoSession(cid, info)
+      ..attribution = sameVideo ? previous!.attribution : null
       ..attach();
+    // 没有点卡片也没有打开新页面，是在视频页里直接换了视频：合集、播放列表、自动连播等。
+    if (session.attribution == null && previous != null && !sameVideo) {
+      session.attribution = const {'source': 'in_page'};
+    }
   }
 
   /// 当前播放器播放的是 [session] 时返回它。
@@ -364,6 +385,11 @@ class _VideoSession {
       'title': info['title'],
       'owner': info['owner'],
       'owner_mid': info['owner_mid'],
+      'tid': info['tid'],
+      'tid_v2': info['tid_v2'],
+      'tname': info['tname'],
+      'tags': info['tags'],
+      'part_index': info['part_index'],
       'duration_sec': durationSec,
       'opened_sec': (now - startMs) ~/ 1000,
       'first_play_after_ms': firstPlay == null ? null : firstPlay - startMs,

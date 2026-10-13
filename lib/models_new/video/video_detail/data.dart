@@ -16,6 +16,10 @@ class VideoDetailData {
   int? aid;
   int? videos;
   int? copyright;
+  int? tid;
+  int? tidV2;
+  String? tname;
+  String? tnameV2;
   String? pic;
   String? title;
   int? pubdate;
@@ -67,6 +71,10 @@ class VideoDetailData {
     this.aid,
     this.videos,
     this.copyright,
+    this.tid,
+    this.tidV2,
+    this.tname,
+    this.tnameV2,
     this.pic,
     this.title,
     this.pubdate,
@@ -94,6 +102,10 @@ class VideoDetailData {
         aid: json['aid'] as int?,
         videos: json['videos'] as int?,
         copyright: json['copyright'] as int?,
+        tid: json['tid'] as int?,
+        tidV2: json['tid_v2'] as int?,
+        tname: nonNullOrEmptyString(json['tname']),
+        tnameV2: nonNullOrEmptyString(json['tname_v2']),
         pic: json['pic'] as String?,
         title: json['title'] as String?,
         pubdate: json['pubdate'] as int?,

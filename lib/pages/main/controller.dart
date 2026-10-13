@@ -242,6 +242,10 @@ class MainController extends GetxController
     this.navigationBars = navigationBars;
     final defPage = Pref.defaultHomePage;
     selectedIndex.value = math.max(0, navigationBars.indexOf(defPage));
+    UsageLog.navTab(
+      navigationBars.elementAtOrNull(selectedIndex.value)?.name,
+      initial: true,
+    );
   }
 
   void checkDefaultSearch([bool shouldCheck = false]) {
@@ -298,7 +302,7 @@ class MainController extends GetxController
     final currentNav = navigationBars[value];
     if (value != selectedIndex.value) {
       selectedIndex.value = value;
-      UsageLog.log('nav_tab', {'tab': currentNav.name});
+      UsageLog.navTab(currentNav.name);
       if (mainTabBarView) {
         controller.animateTo(value);
       } else {

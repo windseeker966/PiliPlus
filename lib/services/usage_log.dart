@@ -22,7 +22,9 @@
 //   app_start / app_foreground / app_background   含网络类型 net、横竖屏 orient
 //   network_change                  网络类型变化
 //   deep_link                       通过外部链接打开（分享链接等）
-//   page_enter / page_leave         页面（路由）进入与离开；点卡片进入的带 impression_id 等归因字段
+//   page_enter / page_leave         页面（路由）进入与离开；点卡片进入的带 impression_id 等归因字段，
+//                                   其他方式进入的视频页带 source（history、home:bangumi、dynamics、
+//                                   watchLater、page:member 等）；视频页内换视频的观看 source 为 in_page
 //   nav_tab / home_tab              底部导航、首页顶部分区切换
 //   list_refresh / list_load_more   列表下拉刷新（含首次加载）与上滑加载更多，带 request_id
 //   search                          搜索（关键词、类型、排序）
@@ -53,6 +55,7 @@ import 'package:PiliPlus/models_new/live/live_room_info_h5/data.dart';
 import 'package:PiliPlus/models_new/pgc/pgc_info_model/episode.dart';
 import 'package:PiliPlus/models_new/video/video_detail/data.dart';
 import 'package:PiliPlus/models_new/video/video_detail/page.dart';
+import 'package:PiliPlus/models_new/video/video_tag/data.dart';
 import 'package:PiliPlus/pages/hot/controller.dart';
 import 'package:PiliPlus/pages/member_video_web/base/controller.dart';
 import 'package:PiliPlus/pages/popular_precious/controller.dart';
@@ -681,20 +684,23 @@ abstract final class UsageLog {
   static final LinkedHashMap<String, Map<String, Object?>> _attributionByBvid =
       LinkedHashMap();
 
-  /// 最近一次被页面取走的归因，给拿不到 bvid 的观看（直播等）使用。
-  static ({int atMs, Map<String, Object?> fields})? _recentAttribution;
+  /// 最近一次被页面取走的归因。bvid 为页面知道的视频；给拿不到 bvid 的观看（直播等），
+  /// 以及页面参数里没有 bvid 的视频使用。
+  static ({int atMs, String? bvid, Map<String, Object?> fields})?
+  _recentAttribution;
 
-  /// 开始观看统计时取归因：有 bvid 时按 bvid 取，否则取刚刚点击打开的那次。
+  /// 开始观看统计时取归因：有 bvid 时按 bvid 取，取不到时用刚刚打开、但不知道是哪个视频的页面的。
   static Map<String, Object?>? _attributionForVideo(String? bvid) {
     final recent = _recentAttribution;
     if (bvid != null) {
       final fields = _attributionByBvid.remove(bvid);
-      if (fields != null && identical(fields, recent?.fields)) {
-        _recentAttribution = null;
+      if (fields != null) {
+        if (identical(fields, recent?.fields)) _recentAttribution = null;
+        return fields;
       }
-      return fields;
     }
     if (recent == null ||
+        (bvid != null && recent.bvid != null) ||
         _now() - recent.atMs > _attributionTimeout.inMilliseconds) {
       return null;
     }
@@ -714,16 +720,59 @@ abstract final class UsageLog {
       return null;
     }
     _pendingAttribution = null;
-    _recentAttribution = (atMs: pending.atMs, fields: pending.fields);
-    if (bvid ?? pending.bvid case final key?) {
+    _remember(bvid ?? pending.bvid, pending.fields, pending.atMs);
+    return pending.fields;
+  }
+
+  /// 记下页面的归因，留给之后开始的观看统计。
+  static void _remember(String? bvid, Map<String, Object?> fields, int atMs) {
+    _recentAttribution = (atMs: atMs, bvid: bvid, fields: fields);
+    if (bvid != null) {
       _attributionByBvid
-        ..remove(key)
-        ..[key] = pending.fields;
+        ..remove(bvid)
+        ..[bvid] = fields;
       if (_attributionByBvid.length > 20) {
         _attributionByBvid.remove(_attributionByBvid.keys.first);
       }
     }
-    return pending.fields;
+  }
+
+  // ---- 导航 ----
+
+  static String? _navTab;
+  static String? _homeTab;
+
+  /// 底部导航切换。initial 为启动时的默认页，只记下不写事件。
+  static void navTab(String? tab, {bool initial = false}) {
+    if (tab == null) return;
+    _navTab = tab;
+    if (!initial) log('nav_tab', {'tab': tab});
+  }
+
+  /// 首页顶部分区切换。initial 为启动时的默认分区，只记下不写事件。
+  static void homeTab(String? tab, {bool initial = false}) {
+    if (tab == null) return;
+    _homeTab = tab;
+    if (!initial) log('home_tab', {'tab': tab});
+  }
+
+  /// 不是点卡片打开的视频页，按从哪里进来标记来源。sourceType 为视频页参数，
+  /// 稍后再看、收藏夹、UP 主投稿列表等播放列表会带上。
+  static Map<String, Object?> _navAttribution(String? from, Object? sourceType) {
+    final String source;
+    if (sourceType is String && sourceType != 'normal') {
+      source = sourceType;
+    } else if (from == '/') {
+      // 首页各分区里不是视频卡片的入口（番剧、直播等），以及动态、我的页面。
+      source = _navTab == null || _navTab == 'home'
+          ? 'home:${_homeTab ?? 'unknown'}'
+          : _navTab!;
+    } else if (from != null) {
+      source = 'page:${from.substring(1)}';
+    } else {
+      source = 'unknown';
+    }
+    return {'source': source};
   }
 
   // ---- 互动反馈 ----
@@ -789,6 +838,17 @@ abstract final class UsageLog {
     _video.onInfo(cid, info);
   }
 
+  /// 视频标签加载完成（比详情晚到），补到这个视频的观看统计里。
+  static void videoTags(String bvid, List<VideoTagItem>? tags) {
+    if (!_enabled || tags == null) return;
+    final names = [
+      for (final tag in tags)
+        if (tag.tagName case final name? when name.isNotEmpty) name,
+    ];
+    if (names.isEmpty) return;
+    _video.onTags(bvid, names.length > 20 ? names.sublist(0, 20) : names);
+  }
+
   static void playerState(
     PlayerStatus status,
     Duration position, {
@@ -852,6 +912,10 @@ abstract final class UsageLog {
           'title': data.title,
           'owner': data.owner?.name,
           'owner_mid': data.owner?.mid,
+          // 接口目前只给分区 ID，名称多为空字符串。
+          'tid': data.tid,
+          'tid_v2': data.tidV2,
+          'tname': data.tnameV2 ?? data.tname,
           'duration_sec': multiPage ? part?.duration : data.duration,
           if (multiPage) ...{
             'part': part?.part,
@@ -1027,12 +1091,18 @@ class _UsageNavigatorObserver extends NavigatorObserver {
 
   void _logEnter(Route<dynamic> route, Route<dynamic>? previous, String how) {
     final args = _args(route);
-    final bvid = args['bvid'];
-    final attribution = UsageLog._takeAttribution(
-      bvid is String ? bvid : null,
-    );
+    final bvid = args['bvid'] is String ? args['bvid'] as String : null;
+    var attribution = UsageLog._takeAttribution(bvid);
+    final page = _name(route);
+    if (attribution == null && _playerPages.contains(page)) {
+      attribution = UsageLog._navAttribution(
+        _name(previous),
+        args['sourceType'],
+      );
+      UsageLog._remember(bvid, attribution, UsageLog._now());
+    }
     UsageLog.log('page_enter', {
-      'page': _name(route),
+      'page': page,
       'from': _name(previous),
       'how': how,
       ...args,

@@ -79,11 +79,15 @@ class HomeController extends GetxController
       vsync: this,
     );
     var loggedIndex = tabController.index;
+    UsageLog.homeTab(
+      this.tabs.elementAtOrNull(loggedIndex)?.name,
+      initial: true,
+    );
     tabController.addListener(() {
       final index = tabController.index;
       if (!tabController.indexIsChanging && index != loggedIndex) {
         loggedIndex = index;
-        UsageLog.log('home_tab', {'tab': this.tabs[index].name});
+        UsageLog.homeTab(this.tabs[index].name);
       }
     });
   }
