@@ -44,8 +44,6 @@ abstract final class LaterMode {
   /// 外部链接拉起后，这段时间内打开的视频算作外部分享。
   static const _externalWindow = Duration(seconds: 15);
 
-  /// 本地记下的加入时间保留多久；启动时完整拉取一遍列表后会以服务器为准。
-  static const _rememberFor = Duration(days: 3);
   static const _maxStartupPages = 10;
 
   static const _keyAddedAt = 'laterModeAddedAt';
@@ -78,10 +76,9 @@ abstract final class LaterMode {
     return _addedAtCache = map;
   }
 
+  /// 记录由启动时的完整同步（以服务器列表为准）和移除视频时的更新维护，不按时间清理：
+  /// 稍后再看里的视频可能是很久以前加的。
   static void _saveAddedAt() {
-    final minMs = _now() - _rememberFor.inMilliseconds;
-    // 不知道加入时间（0）的是服务器列表里的视频，由启动时的完整拉取维护，这里不清理。
-    _addedAt.removeWhere((_, at) => at != 0 && at < minMs);
     GStorage.localCache.put(_keyAddedAt, Map<String, int>.of(_addedAt));
   }
 
