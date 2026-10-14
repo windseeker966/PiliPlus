@@ -18,6 +18,7 @@ import 'package:PiliPlus/pages/live/view.dart';
 import 'package:PiliPlus/pages/rank/view.dart';
 import 'package:PiliPlus/pages/subscription_detail/view.dart';
 import 'package:PiliPlus/pages/video/reply_reply/view.dart';
+import 'package:PiliPlus/services/later_mode.dart';
 import 'package:PiliPlus/services/usage_log.dart';
 import 'package:PiliPlus/utils/id_utils.dart';
 import 'package:PiliPlus/utils/page_utils.dart';
@@ -47,6 +48,7 @@ abstract final class PiliScheme {
     listener?.cancel();
     listener = appLinks.uriLinkStream.listen((uri) {
       UsageLog.deepLink(uri);
+      LaterMode.markExternal();
       PlatformUtils.isDesktop ? _desktopRoutePush(uri) : routePush(uri);
     });
   }

@@ -14,6 +14,7 @@ import 'package:PiliPlus/grpc/bilibili/im/interfaces/v1.pb.dart'
 import 'package:PiliPlus/grpc/bilibili/im/type.pb.dart' show Msg, MsgType;
 import 'package:PiliPlus/http/search.dart';
 import 'package:PiliPlus/models/common/image_preview_type.dart';
+import 'package:PiliPlus/services/later_mode.dart';
 import 'package:PiliPlus/utils/app_scheme.dart';
 import 'package:PiliPlus/utils/date_utils.dart';
 import 'package:PiliPlus/utils/duration_utils.dart';
@@ -335,6 +336,7 @@ class ChatItem extends StatelessWidget {
                       SmartDialog.dismiss();
                       if (cid != null) {
                         PageUtils.toVideoPage(
+                          playSource: LaterPlaySource.message,
                           bvid: bvid,
                           cid: cid,
                           cover: i['cover_url'],
@@ -429,6 +431,7 @@ class ChatItem extends StatelessWidget {
                   SmartDialog.dismiss();
                   if (cid != null) {
                     PageUtils.toVideoPage(
+                      playSource: LaterPlaySource.message,
                       bvid: bvid,
                       cid: cid,
                       cover: content['cover'],
@@ -532,6 +535,7 @@ class ChatItem extends StatelessWidget {
           SmartDialog.dismiss();
           if (cid != null) {
             PageUtils.toVideoPage(
+              playSource: LaterPlaySource.message,
               aid: aid,
               bvid: bvid,
               cid: cid,

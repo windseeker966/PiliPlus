@@ -13,6 +13,7 @@ import 'package:PiliPlus/plugin/pl_player/utils/fullscreen.dart';
 import 'package:PiliPlus/router/app_pages.dart';
 import 'package:PiliPlus/services/account_service.dart';
 import 'package:PiliPlus/services/download/download_service.dart';
+import 'package:PiliPlus/services/later_mode.dart';
 import 'package:PiliPlus/services/logger.dart';
 import 'package:PiliPlus/services/service_locator.dart';
 import 'package:PiliPlus/services/usage_log.dart';
@@ -193,6 +194,7 @@ void main() async {
   }
 
   UsageLog.init();
+  LaterMode.init();
 
   if (Pref.enableLog) {
     // 异常捕获 logo记录

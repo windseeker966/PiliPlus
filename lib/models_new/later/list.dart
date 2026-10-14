@@ -26,6 +26,9 @@ class LaterItemModel with MultiSelectData {
   bool? isCharging;
   Dimension? dimension;
 
+  /// 加入稍后再看的时间（秒）。
+  int? addAt;
+
   LaterItemModel({
     this.aid,
     this.pic,
@@ -46,6 +49,7 @@ class LaterItemModel with MultiSelectData {
     this.isPugv,
     this.isCharging,
     this.dimension,
+    this.addAt,
   });
 
   factory LaterItemModel.fromJson(Map<String, dynamic> json) => LaterItemModel(
@@ -83,5 +87,6 @@ class LaterItemModel with MultiSelectData {
     dimension: json['dimension'] == null
         ? null
         : Dimension.fromJson(json['dimension'] as Map<String, dynamic>),
+    addAt: json['add_at'] as int?,
   );
 }

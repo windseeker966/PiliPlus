@@ -14,11 +14,13 @@ import 'package:PiliPlus/models_new/space_setting/data.dart';
 import 'package:PiliPlus/models_new/sub/sub/data.dart';
 import 'package:PiliPlus/models_new/user_real_name/data.dart';
 import 'package:PiliPlus/models_new/video/video_tag/data.dart';
+import 'package:PiliPlus/services/later_mode.dart';
 import 'package:PiliPlus/services/usage_log.dart';
 import 'package:PiliPlus/utils/accounts.dart';
 import 'package:PiliPlus/utils/accounts/account.dart';
 import 'package:PiliPlus/utils/app_sign.dart';
 import 'package:PiliPlus/utils/global_data.dart';
+import 'package:PiliPlus/utils/id_utils.dart';
 import 'package:PiliPlus/utils/wbi_sign.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
@@ -76,7 +78,9 @@ abstract final class UserHttp {
       }),
     );
     if (res.data['code'] == 0) {
-      return Success(LaterData.fromJson(res.data['data']));
+      final data = LaterData.fromJson(res.data['data']);
+      LaterMode.rememberList(data.list);
+      return Success(data);
     } else {
       return Error(res.data['message']);
     }
@@ -172,6 +176,7 @@ abstract final class UserHttp {
     Object? aid,
   }) async {
     assert(aid != null || bvid != null);
+    if (!LaterMode.beforeAdd()) return const Error(null);
     final res = await Request().post(
       Api.toViewLater,
       data: {
@@ -183,7 +188,7 @@ abstract final class UserHttp {
     );
     if (res.data['code'] == 0) {
       UsageLog.feedback('later', bvid: bvid, aid: aid);
-      SmartDialog.showToast('yeah！稍后再看');
+      SmartDialog.showToast(LaterMode.onAdded(bvid: bvid, aid: aid));
       return const Success(null);
     } else {
       SmartDialog.showToast(res.data['message'].toString());
@@ -203,6 +208,9 @@ abstract final class UserHttp {
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );
     if (res.data['code'] == 0) {
+      LaterMode.onRemoved(
+        aids.split(',').map(int.tryParse).whereType<int>().map(IdUtils.av2bv),
+      );
       SmartDialog.showToast('yeah！成功移除');
       return const Success(null);
     } else {
@@ -241,6 +249,8 @@ abstract final class UserHttp {
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );
     if (res.data['code'] == 0) {
+      // 以服务器列表为准刷新加入时间的记录。
+      LaterMode.init();
       return const Success(null);
     } else {
       return Error(res.data['message']);

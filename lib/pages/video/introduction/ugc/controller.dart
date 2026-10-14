@@ -27,6 +27,7 @@ import 'package:PiliPlus/pages/dynamics_repost/view.dart';
 import 'package:PiliPlus/pages/video/related/controller.dart';
 import 'package:PiliPlus/pages/video/reply/controller.dart';
 import 'package:PiliPlus/plugin/pl_player/models/play_repeat.dart';
+import 'package:PiliPlus/services/later_mode.dart';
 import 'package:PiliPlus/services/service_locator.dart';
 import 'package:PiliPlus/services/usage_log.dart';
 import 'package:PiliPlus/utils/accounts.dart';
@@ -463,13 +464,28 @@ class UgcIntroController extends CommonIntroController with ReloadMixin {
   }
 
   // 修改分P或番剧分集
+  /// [auto] 为播完自动连播：稍后再看模式下不能播放时直接停下，不弹窗。
   Future<bool> onChangeEpisode(
     BaseEpisodeItem episode, {
     bool isStein = false,
+    bool auto = false,
   }) async {
     try {
       final String bvid = episode.bvid ?? this.bvid;
       final int aid = episode.aid ?? IdUtils.bv2av(bvid);
+      // 同一个视频的分P随便切；换成别的视频要经过稍后再看模式。
+      if (bvid != this.bvid &&
+          LaterMode.enabled &&
+          !await LaterMode.allowPlay(
+            bvid: bvid,
+            title: episode.title,
+            fromLaterList:
+                videoDetailCtr.sourceType == SourceType.watchLater &&
+                videoDetailCtr.mediaList.any((item) => item.bvid == bvid),
+            auto: auto,
+          )) {
+        return false;
+      }
       int? cid = episode.cid;
       Dimension? dimension;
       if (cid == null) {
@@ -714,7 +730,7 @@ class UgcIntroController extends CommonIntroController with ReloadMixin {
       }
 
       if (cid != this.cid.value) {
-        onChangeEpisode(episodes[nextIndex]);
+        onChangeEpisode(episodes[nextIndex], auto: true);
         return true;
       } else {
         return false;
@@ -725,6 +741,8 @@ class UgcIntroController extends CommonIntroController with ReloadMixin {
   }
 
   bool playRelated() {
+    // 稍后再看模式下不自动连播相关视频。
+    if (LaterMode.enabled) return false;
     RelatedController relatedCtr;
     if (Get.isRegistered<RelatedController>(tag: heroTag)) {
       relatedCtr = Get.find<RelatedController>(tag: heroTag);

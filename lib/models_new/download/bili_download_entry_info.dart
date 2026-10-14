@@ -3,6 +3,7 @@ import 'package:PiliPlus/models_new/download/download_info.dart';
 import 'package:PiliPlus/models_new/sponsor_block/segment_item.dart';
 import 'package:PiliPlus/pages/common/multi_select/base.dart'
     show MultiSelectData;
+import 'package:PiliPlus/services/later_mode.dart';
 import 'package:PiliPlus/utils/page_utils.dart';
 import 'package:PiliPlus/utils/path_utils.dart';
 import 'package:PiliPlus/utils/platform_utils.dart';
@@ -107,6 +108,7 @@ class BiliDownloadEntryInfo with MultiSelectData {
               return;
             }
             PageUtils.toVideoPage(
+              playSource: LaterPlaySource.download,
               aid: avid,
               bvid: bvid,
               cid: cid,

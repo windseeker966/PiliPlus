@@ -19,6 +19,7 @@ import 'package:PiliPlus/pages/common/common_intro_controller.dart';
 import 'package:PiliPlus/pages/dynamics_repost/view.dart';
 import 'package:PiliPlus/pages/video/reply/controller.dart';
 import 'package:PiliPlus/plugin/pl_player/models/play_repeat.dart';
+import 'package:PiliPlus/services/later_mode.dart';
 import 'package:PiliPlus/services/service_locator.dart';
 import 'package:PiliPlus/services/usage_log.dart';
 import 'package:PiliPlus/utils/android/android_helper.dart';
@@ -366,6 +367,8 @@ class PgcIntroController extends CommonIntroController {
   /// 列表循环或者顺序播放时，自动播放下一个；自动连播时，播放相关视频
   @override
   bool nextPlay() {
+    // 稍后再看模式下番剧、课程不自动播下一集。
+    if (LaterMode.enabled) return false;
     try {
       final episodes = pgcItem.episodes!;
 

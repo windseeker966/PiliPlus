@@ -9,6 +9,7 @@ import 'package:PiliPlus/models/common/badge_type.dart';
 import 'package:PiliPlus/models_new/history/list.dart';
 import 'package:PiliPlus/models_new/video/video_detail/dimension.dart';
 import 'package:PiliPlus/pages/common/multi_select/base.dart';
+import 'package:PiliPlus/services/later_mode.dart';
 import 'package:PiliPlus/utils/date_utils.dart';
 import 'package:PiliPlus/utils/duration_utils.dart';
 import 'package:PiliPlus/utils/id_utils.dart';
@@ -99,6 +100,7 @@ class HistoryItem extends StatelessWidget {
                   if (cid != null) {
                     // TODO: dimension
                     PageUtils.toVideoPage(
+                      playSource: LaterPlaySource.history,
                       aid: aid,
                       bvid: bvid,
                       cid: cid,

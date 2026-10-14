@@ -9,6 +9,7 @@ import 'package:PiliPlus/http/loading_state.dart';
 import 'package:PiliPlus/http/search.dart';
 import 'package:PiliPlus/http/video.dart';
 import 'package:PiliPlus/models/common/image_preview_type.dart';
+import 'package:PiliPlus/models/common/video/source_type.dart' as video;
 import 'package:PiliPlus/models/common/video/video_type.dart';
 import 'package:PiliPlus/models/dynamics/result.dart';
 import 'package:PiliPlus/models_new/pgc/pgc_info_model/episode.dart';
@@ -18,6 +19,7 @@ import 'package:PiliPlus/pages/common/publish/publish_route.dart';
 import 'package:PiliPlus/pages/contact/view.dart';
 import 'package:PiliPlus/pages/fav_panel/view.dart';
 import 'package:PiliPlus/pages/share/view.dart';
+import 'package:PiliPlus/services/later_mode.dart';
 import 'package:PiliPlus/utils/android/android_helper.dart';
 import 'package:PiliPlus/utils/app_scheme.dart';
 import 'package:PiliPlus/utils/extension/context_ext.dart';
@@ -533,6 +535,76 @@ abstract final class PageUtils {
     Map? extraArguments,
     bool off = false,
     bool isVertical = false,
+    Dimension? dimension,
+    LaterPlaySource? playSource,
+  }) {
+    if (LaterMode.enabled) {
+      final resolvedBvid = bvid ?? IdUtils.av2bv(aid!);
+      final isPgc =
+          videoType != VideoType.ugc ||
+          epId != null ||
+          extraArguments?['pgcApi'] == true;
+      final fromLaterList =
+          extraArguments?['sourceType'] == video.SourceType.watchLater ||
+          extraArguments?['viewLater'] == true;
+      return LaterMode.allowPlay(
+        bvid: resolvedBvid,
+        title: title,
+        fromLaterList: fromLaterList,
+        isPgc: isPgc,
+        source: playSource,
+      ).then((allowed) {
+        if (!allowed) return null;
+        return _openVideoPage(
+          videoType: videoType,
+          aid: aid,
+          bvid: resolvedBvid,
+          cid: cid,
+          seasonId: seasonId,
+          epId: epId,
+          pgcType: pgcType,
+          cover: cover,
+          title: title,
+          progress: progress,
+          extraArguments: extraArguments,
+          off: off,
+          isVertical: isVertical,
+          dimension: dimension,
+        );
+      });
+    }
+    return _openVideoPage(
+      videoType: videoType,
+      aid: aid,
+      bvid: bvid,
+      cid: cid,
+      seasonId: seasonId,
+      epId: epId,
+      pgcType: pgcType,
+      cover: cover,
+      title: title,
+      progress: progress,
+      extraArguments: extraArguments,
+      off: off,
+      isVertical: isVertical,
+      dimension: dimension,
+    );
+  }
+
+  static Future<void>? _openVideoPage({
+    required VideoType videoType,
+    int? aid,
+    String? bvid,
+    required int cid,
+    int? seasonId,
+    int? epId,
+    int? pgcType,
+    String? cover,
+    String? title,
+    int? progress,
+    Map? extraArguments,
+    required bool off,
+    required bool isVertical,
     Dimension? dimension,
   }) {
     final arguments = {

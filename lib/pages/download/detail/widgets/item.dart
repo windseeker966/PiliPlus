@@ -16,6 +16,7 @@ import 'package:PiliPlus/models_new/download/bili_download_entry_info.dart';
 import 'package:PiliPlus/pages/common/multi_select/base.dart';
 import 'package:PiliPlus/pages/download/downloading/view.dart';
 import 'package:PiliPlus/services/download/download_service.dart';
+import 'package:PiliPlus/services/later_mode.dart';
 import 'package:PiliPlus/utils/duration_utils.dart';
 import 'package:PiliPlus/utils/extension/num_ext.dart';
 import 'package:PiliPlus/utils/page_utils.dart';
@@ -154,6 +155,7 @@ class DetailItem extends StatelessWidget {
           }
           if (entry.isCompleted) {
             await PageUtils.toVideoPage(
+              playSource: LaterPlaySource.download,
               aid: entry.avid,
               cid: cid!,
               cover: entry.cover,

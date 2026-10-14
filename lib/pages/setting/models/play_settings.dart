@@ -11,6 +11,7 @@ import 'package:PiliPlus/pages/setting/widgets/slider_dialog.dart';
 import 'package:PiliPlus/plugin/pl_player/models/bottom_progress_behavior.dart';
 import 'package:PiliPlus/plugin/pl_player/models/fullscreen_mode.dart';
 import 'package:PiliPlus/plugin/pl_player/models/play_repeat.dart';
+import 'package:PiliPlus/services/later_mode.dart';
 import 'package:PiliPlus/services/service_locator.dart';
 import 'package:PiliPlus/utils/android/android_helper.dart';
 import 'package:PiliPlus/utils/extension/num_ext.dart';
@@ -25,6 +26,12 @@ import 'package:material_design_icons_flutter/material_design_icons_flutter.dart
 import 'package:material_ui/material_ui.dart';
 
 List<SettingsModel> get playSettings => [
+  NormalModel(
+    title: '稍后再看模式',
+    leading: const Icon(Icons.watch_later_outlined),
+    getSubtitle: () => LaterMode.settingSubtitle,
+    onTap: LaterMode.toggle,
+  ),
   const SwitchModel(
     title: '弹幕开关',
     subtitle: '是否展示弹幕',

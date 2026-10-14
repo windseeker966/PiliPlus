@@ -55,6 +55,7 @@ import 'package:PiliPlus/plugin/pl_player/models/play_repeat.dart';
 import 'package:PiliPlus/plugin/pl_player/models/play_status.dart';
 import 'package:PiliPlus/plugin/pl_player/utils/fullscreen.dart';
 import 'package:PiliPlus/plugin/pl_player/view/view.dart';
+import 'package:PiliPlus/services/later_mode.dart';
 import 'package:PiliPlus/services/service_locator.dart';
 import 'package:PiliPlus/services/shutdown_timer_service.dart'
     show shutdownTimerService;
@@ -208,6 +209,22 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
     }
   }
 
+  /// 稍后再看模式：看完（多P视频看完最后一P）后从稍后再看移除。
+  void _removeFinishedLater() {
+    final intro = introController;
+    if (intro is! UgcIntroController) return;
+    final pages = intro.videoDetail.value.pages;
+    if (pages != null &&
+        pages.length > 1 &&
+        videoDetailController.cid.value != pages.last.cid) {
+      return;
+    }
+    LaterMode.onCompleted(
+      bvid: videoDetailController.bvid,
+      aid: videoDetailController.aid,
+    );
+  }
+
   void _setPlayCallBack() {
     PlPlayerController.setPlayCallBack(
       playCallBack,
@@ -252,6 +269,7 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
     }
 
     if (status.isCompleted) {
+      _removeFinishedLater();
       try {
         if (videoDetailController
                 .steinEdgeInfo

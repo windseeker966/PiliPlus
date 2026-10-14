@@ -15,8 +15,8 @@
 //   impressions.impression_id → card_click → page_enter / video_end 中的 impression_id，
 //   list_refresh / list_load_more 的 request_id 对应 impressions.request_id。
 //
-// 转发给「本地时间采集」应用（com.wind.timetracker，见 UsageLogBridge.kt）的接口保留，
-// 目前停用，见 [UsageLog._forwardToTimeTracker]。
+// 事件（不含曝光）同时转发给「本地时间采集」应用（com.wind.timetracker，见 UsageLogBridge.kt），
+// 见 [UsageLog._forwardToTimeTracker]。
 //
 // 事件类型：
 //   app_start / app_foreground / app_background   含网络类型 net、横竖屏 orient
@@ -35,6 +35,7 @@
 //   video_end                       一个视频的观看结束（离开、切换），附观看汇总
 //   feedback                        点赞、投币、收藏、三连、点踩、不感兴趣、关注、拉黑、稍后再看、分享
 //   log_error                       有记录写不进数据库而被丢弃（错误信息和丢弃条数）
+//   later_* / instant_play          稍后再看模式，见 later_mode.dart
 
 import 'dart:async';
 import 'dart:collection' show LinkedHashMap;
@@ -82,8 +83,8 @@ part 'usage_log_impression.dart';
 part 'usage_log_video.dart';
 
 abstract final class UsageLog {
-  /// 是否同时把事件转发给「本地时间采集」。目前停用，只保留接口。
-  static const _forwardToTimeTracker = false;
+  /// 是否同时把事件转发给「本地时间采集」。
+  static const _forwardToTimeTracker = true;
   static const _channel = MethodChannel('piliplus/usage_log');
 
   static const _dbName = 'usage_log.db';
@@ -758,7 +759,10 @@ abstract final class UsageLog {
 
   /// 不是点卡片打开的视频页，按从哪里进来标记来源。sourceType 为视频页参数，
   /// 稍后再看、收藏夹、UP 主投稿列表等播放列表会带上。
-  static Map<String, Object?> _navAttribution(String? from, Object? sourceType) {
+  static Map<String, Object?> _navAttribution(
+    String? from,
+    Object? sourceType,
+  ) {
     final String source;
     if (sourceType is String && sourceType != 'normal') {
       source = sourceType;
