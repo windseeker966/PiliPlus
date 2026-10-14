@@ -14,6 +14,7 @@
 //   later_direct_play    不经过稍后再看直接播放，带 via（download / history / message / external）
 //   later_auto_remove    看完后自动从稍后再看移除
 //   later_mode_on / later_mode_off  开关稍后再看模式
+//   later_sync           启动时同步稍后再看列表，带 result（ok / partial / error / not_login）
 
 import 'dart:async';
 
@@ -111,11 +112,16 @@ abstract final class LaterMode {
 
   /// 启动时拉取整个稍后再看列表，以服务器为准刷新本地记录。
   static Future<void> init() async {
-    if (!enabled || !Accounts.main.isLogin) return;
+    if (!enabled) return;
+    if (!Accounts.main.isLogin) {
+      _log('later_sync', const {'result': 'not_login'});
+      return;
+    }
     try {
       await _syncList();
-    } catch (_) {
+    } catch (e) {
       // 网络等错误：保留本地记录，下次再同步。
+      _log('later_sync', {'result': 'error', 'error': '$e'});
     }
   }
 
@@ -124,7 +130,11 @@ abstract final class LaterMode {
     for (var page = 1; page <= _maxStartupPages; page++) {
       final res = await UserHttp.seeYouLater(page: page);
       final data = res.dataOrNull;
-      if (data == null) return; // 请求失败，保留本地记录
+      if (data == null) {
+        // 请求失败，保留本地记录。
+        _log('later_sync', {'result': 'error', 'error': '$res'});
+        return;
+      }
       final list = data.list ?? const <LaterItemModel>[];
       for (final item in list) {
         final bvid = _bvidOf(bvid: item.bvid, aid: item.aid);
@@ -140,9 +150,11 @@ abstract final class LaterMode {
           if (at != 0 || !_addedAt.containsKey(bvid)) _addedAt[bvid] = at;
         });
         _saveAddedAt();
+        _log('later_sync', {'result': 'ok', 'items': fetched.length});
         return;
       }
     }
+    _log('later_sync', {'result': 'partial', 'items': fetched.length});
   }
 
   // ---- 每日额度 ----
