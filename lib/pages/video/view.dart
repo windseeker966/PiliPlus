@@ -323,8 +323,32 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
     plPlayerController!.play();
   }
 
+  /// 稍后再看模式的预览页点播放：已冷却直接播放，否则询问加入稍后再看或立即观看。
+  Future<void> _confirmLaterPlay() async {
+    final intro = introController;
+    final ok = await LaterMode.confirmPlay(
+      bvid: videoDetailController.bvid,
+      title: intro is UgcIntroController
+          ? intro.videoDetail.value.title
+          : videoDetailController.args['title'] as String?,
+      fromLaterList: videoDetailController.laterFromList,
+      isPgc: videoDetailController.laterIsPgc,
+    );
+    if (!mounted) return;
+    if (ok) {
+      videoDetailController.laterPreview = false;
+      handlePlay();
+    } else {
+      setState(() {}); // 刷新封面上的说明（例如刚加入稍后再看）
+    }
+  }
+
   /// 未开启自动播放时触发播放
   Future<void>? handlePlay() {
+    if (videoDetailController.laterPreview) {
+      _confirmLaterPlay();
+      return null;
+    }
     if (!videoDetailController.isFileSource) {
       if (videoDetailController.isQuerying) {
         if (kDebugMode) debugPrint('handlePlay: querying');
@@ -1496,18 +1520,48 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
               child: GestureDetector(
                 onTap: handlePlay,
                 behavior: .opaque,
-                child: Obx(
-                  () => NetworkImgLayer(
-                    type: .emote,
-                    quality: 60,
-                    src: videoDetailController.cover.value,
-                    width: width,
-                    height: height,
-                    cacheWidth: true,
-                    getPlaceHolder: () => Center(
-                      child: Image.asset(Assets.loading),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    Obx(
+                      () => NetworkImgLayer(
+                        type: .emote,
+                        quality: 60,
+                        src: videoDetailController.cover.value,
+                        width: width,
+                        height: height,
+                        cacheWidth: true,
+                        getPlaceHolder: () => Center(
+                          child: Image.asset(Assets.loading),
+                        ),
+                      ),
                     ),
-                  ),
+                    if (videoDetailController.laterPreview)
+                      Align(
+                        alignment: Alignment.bottomCenter,
+                        child: Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 8,
+                          ),
+                          color: Colors.black54,
+                          child: Text(
+                            LaterMode.previewHint(
+                              videoDetailController.bvid,
+                              fromLaterList:
+                                  videoDetailController.laterFromList,
+                              isPgc: videoDetailController.laterIsPgc,
+                            ),
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
               ),
             );

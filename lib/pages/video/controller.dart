@@ -123,6 +123,12 @@ class VideoDetailController extends GetxController
   // 是否开始自动播放 存在多p的情况下，第二p需要为true
   final RxBool _autoPlay = Pref.autoPlayEnable.obs;
 
+  /// 稍后再看模式的预览：不自动播放，点播放时由 LaterMode.confirmPlay 决定。
+  bool laterPreview = false;
+  bool laterFromList = false;
+  bool get laterIsPgc =>
+      videoType != VideoType.ugc || args['pgcApi'] == true || epId != null;
+
   final videoPlayerKey = GlobalKey();
   final childKey = GlobalKey<MiniScaffoldState>();
 
@@ -369,6 +375,9 @@ class VideoDetailController extends GetxController
     super.onInit();
     args = Get.arguments;
     videoType = args['videoType'];
+    laterPreview = args['laterPreview'] == true;
+    laterFromList = args['laterFromList'] == true;
+    if (laterPreview) _autoPlay.value = false;
     if (videoType == VideoType.pgc) {
       if (!isLoginVideo) {
         _actualVideoType = VideoType.ugc;
@@ -1405,6 +1414,10 @@ class VideoDetailController extends GetxController
   }
 
   void toAudioPage() {
+    if (laterPreview) {
+      SmartDialog.showToast('稍后再看模式：先点封面开始播放');
+      return;
+    }
     int? id;
     int? extraId;
     PlaylistSource from = PlaylistSource.UP_ARCHIVE;

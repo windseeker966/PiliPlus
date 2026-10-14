@@ -473,19 +473,6 @@ class UgcIntroController extends CommonIntroController with ReloadMixin {
     try {
       final String bvid = episode.bvid ?? this.bvid;
       final int aid = episode.aid ?? IdUtils.bv2av(bvid);
-      // 同一个视频的分P随便切；换成别的视频要经过稍后再看模式。
-      if (bvid != this.bvid &&
-          LaterMode.enabled &&
-          !await LaterMode.allowPlay(
-            bvid: bvid,
-            title: episode.title,
-            fromLaterList:
-                videoDetailCtr.sourceType == SourceType.watchLater &&
-                videoDetailCtr.mediaList.any((item) => item.bvid == bvid),
-            auto: auto,
-          )) {
-        return false;
-      }
       int? cid = episode.cid;
       Dimension? dimension;
       if (cid == null) {
@@ -496,6 +483,29 @@ class UgcIntroController extends CommonIntroController with ReloadMixin {
         }
       }
       if (cid == null) {
+        return false;
+      }
+
+      // 同一个视频的分P随便切；换成别的视频要经过稍后再看模式：
+      // 自动连播不能播放时停下，手动切换时以预览方式打开新的视频页。
+      if (bvid != this.bvid &&
+          LaterMode.enabled &&
+          !LaterMode.canPlay(
+            bvid: bvid,
+            fromLaterList:
+                videoDetailCtr.sourceType == SourceType.watchLater &&
+                videoDetailCtr.mediaList.any((item) => item.bvid == bvid),
+            auto: auto,
+          )) {
+        if (!auto) {
+          PageUtils.toVideoPage(
+            bvid: bvid,
+            cid: cid,
+            cover: episode.cover,
+            title: episode.title,
+            extraArguments: const {'laterPreview': true},
+          );
+        }
         return false;
       }
 

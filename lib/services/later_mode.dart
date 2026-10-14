@@ -1,13 +1,14 @@
 // 稍后再看模式：刷照常，看要排队。
 //
-// 开启后（默认开启），在推荐、搜索、动态、相关视频等地方点开视频不会直接播放，而是先加入稍后再看；
-// 加入满 [LaterMode.cooldown] 后才能从稍后再看里播放。每天最多加入 [LaterMode.dailyAddQuota] 个，
+// 开启后（默认开启），在推荐、搜索、动态、相关视频等地方点开视频，视频页以预览方式打开：
+// 能看简介和评论，但点播放时要先加入稍后再看，加入满 [LaterMode.cooldown] 后才能播放。每天最多加入 [LaterMode.dailyAddQuota] 个，
 // 另有 [LaterMode.dailyInstantQuota] 次「立即观看」。下载、历史记录、私信和外部分享打开的视频直接播放。
 // 视频页内的自动连播只会接着播稍后再看列表里已冷却的视频；看完的视频从稍后再看移除。
 //
 // 记录的事件（写入 UsageLog）：
 //   later_add            加入稍后再看，带 route（加入时所在页面）
 //   later_play           从稍后再看播放，带 waited_min（加入后等了多久，未知时不带）
+//   later_preview        以预览方式打开视频页，带 reason（new / cooldown / pgc）
 //   later_cooldown_block 想看还在冷却的视频，带 wait_min、auto（是否为自动连播）
 //   later_quota_block    额度用完时想加入新视频
 //   instant_play         用了一次立即观看，带 reason（new / cooldown / pgc）
@@ -239,18 +240,18 @@ abstract final class LaterMode {
   /// 通过外部链接拉起（分享链接、浏览器跳转等）。
   static void markExternal() => _externalAtMs = _now();
 
-  /// 打开或切换到一个视频之前调用，返回是否可以播放。
+  /// 打开或切换到一个视频之前调用，返回是否可以直接播放。
+  /// 不能直接播放时，视频页以预览方式打开：能看简介和评论，点播放时再由 [confirmPlay] 决定。
   ///
   /// [fromLaterList] 从稍后再看列表打开；[isPgc] 番剧、课程等不能加入稍后再看的视频；
-  /// [source] 直接播放的入口；[auto] 自动连播，不能播放时直接停下，不弹窗。
-  static Future<bool> allowPlay({
+  /// [source] 直接播放的入口；[auto] 自动连播（不能播放时停下）。
+  static bool canPlay({
     required String bvid,
-    String? title,
     bool fromLaterList = false,
     bool isPgc = false,
     LaterPlaySource? source,
     bool auto = false,
-  }) async {
+  }) {
     if (!enabled) return true;
     if (source != null) {
       _log('later_direct_play', {'bvid': bvid, 'via': source.name});
@@ -261,8 +262,96 @@ abstract final class LaterMode {
       _log('later_direct_play', {'bvid': bvid, 'via': 'external'});
       return true;
     }
+    final waitMin = _waitMinutes(
+      bvid,
+      fromLaterList: fromLaterList,
+      isPgc: isPgc,
+    );
+    if (waitMin == 0) {
+      final addedAt = _addedAt[bvid];
+      _log('later_play', {
+        'bvid': bvid,
+        if (addedAt != null && addedAt > 0)
+          'waited_min': (_now() - addedAt) ~/ 60000,
+      });
+      return true;
+    }
+    if (auto) {
+      _log('later_cooldown_block', {
+        'bvid': bvid,
+        'wait_min': waitMin,
+        'auto': true,
+      });
+      if (waitMin != null) SmartDialog.showToast('下一个视频还在冷却，停止连播');
+      return false;
+    }
+    _log('later_preview', {
+      'bvid': bvid,
+      'reason': isPgc
+          ? 'pgc'
+          : waitMin == null
+          ? 'new'
+          : 'cooldown',
+      'wait_min': ?waitMin,
+    });
+    return false;
+  }
+
+  /// 还要等几分钟才能播放：0 为可以播放；null 为不在稍后再看里（或番剧、课程），需要先加入或立即观看。
+  static int? _waitMinutes(
+    String bvid, {
+    bool fromLaterList = false,
+    bool isPgc = false,
+  }) {
+    if (isPgc) return null;
+    final addedAt = _addedAt[bvid];
+    if (addedAt == null && !fromLaterList) return null;
+    final waitMs = (addedAt ?? 0) + cooldown.inMilliseconds - _now();
+    return waitMs <= 0 ? 0 : (waitMs / 60000).ceil();
+  }
+
+  /// 预览页上方的说明。
+  static String previewHint(
+    String bvid, {
+    bool fromLaterList = false,
+    bool isPgc = false,
+  }) {
+    final waitMin = _waitMinutes(
+      bvid,
+      fromLaterList: fromLaterList,
+      isPgc: isPgc,
+    );
+    if (isPgc) return '稍后再看模式：番剧、课程需要用立即观看';
+    return switch (waitMin) {
+      0 => '已冷却，点击播放',
+      null => '稍后再看模式：可以看简介和评论，点击播放前先加入稍后再看',
+      _ => '已在稍后再看里，$waitMin 分钟后可以播放',
+    };
+  }
+
+  /// 预览页点播放时调用，返回是否开始播放。
+  static Future<bool> confirmPlay({
+    required String bvid,
+    String? title,
+    bool fromLaterList = false,
+    bool isPgc = false,
+  }) async {
+    if (!enabled) return true;
+    final waitMin = _waitMinutes(
+      bvid,
+      fromLaterList: fromLaterList,
+      isPgc: isPgc,
+    );
+    if (waitMin == 0) {
+      final addedAt = _addedAt[bvid];
+      _log('later_play', {
+        'bvid': bvid,
+        if (addedAt != null && addedAt > 0)
+          'waited_min': (_now() - addedAt) ~/ 60000,
+      });
+      return true;
+    }
     if (isPgc) {
-      if (auto) return false;
       return _askInstant(
         title: title,
         bvid: bvid,
@@ -270,27 +359,12 @@ abstract final class LaterMode {
         message: '番剧、课程不能加入稍后再看。',
       );
     }
-    final addedAt = _addedAt[bvid];
-    if (addedAt != null || fromLaterList) {
-      final waitMs = (addedAt ?? 0) + cooldown.inMilliseconds - _now();
-      if (waitMs <= 0) {
-        _log('later_play', {
-          'bvid': bvid,
-          if (addedAt != null && addedAt > 0)
-            'waited_min': (_now() - addedAt) ~/ 60000,
-        });
-        return true;
-      }
-      final waitMin = (waitMs / 60000).ceil();
+    if (waitMin != null) {
       _log('later_cooldown_block', {
         'bvid': bvid,
         'wait_min': waitMin,
-        'auto': auto,
+        'auto': false,
       });
-      if (auto) {
-        SmartDialog.showToast('下一个视频还在冷却，停止连播');
-        return false;
-      }
       return _askInstant(
         title: title,
         bvid: bvid,
@@ -298,7 +372,6 @@ abstract final class LaterMode {
         message: '这个视频还在冷却，$waitMin 分钟后可以看。',
       );
     }
-    if (auto) return false;
     return _askAdd(title: title, bvid: bvid);
   }
 

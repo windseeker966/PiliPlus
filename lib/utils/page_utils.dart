@@ -538,8 +538,7 @@ abstract final class PageUtils {
     Dimension? dimension,
     LaterPlaySource? playSource,
   }) {
-    if (LaterMode.enabled) {
-      final resolvedBvid = bvid ?? IdUtils.av2bv(aid!);
+    if (LaterMode.enabled && extraArguments?['laterPreview'] != true) {
       final isPgc =
           videoType != VideoType.ugc ||
           epId != null ||
@@ -547,31 +546,20 @@ abstract final class PageUtils {
       final fromLaterList =
           extraArguments?['sourceType'] == video.SourceType.watchLater ||
           extraArguments?['viewLater'] == true;
-      return LaterMode.allowPlay(
-        bvid: resolvedBvid,
-        title: title,
+      final canPlay = LaterMode.canPlay(
+        bvid: bvid ?? IdUtils.av2bv(aid!),
         fromLaterList: fromLaterList,
         isPgc: isPgc,
         source: playSource,
-      ).then((allowed) {
-        if (!allowed) return null;
-        return _openVideoPage(
-          videoType: videoType,
-          aid: aid,
-          bvid: resolvedBvid,
-          cid: cid,
-          seasonId: seasonId,
-          epId: epId,
-          pgcType: pgcType,
-          cover: cover,
-          title: title,
-          progress: progress,
-          extraArguments: extraArguments,
-          off: off,
-          isVertical: isVertical,
-          dimension: dimension,
-        );
-      });
+      );
+      if (!canPlay) {
+        // 预览：能看简介和评论，点播放时再决定。
+        extraArguments = {
+          ...?extraArguments,
+          'laterPreview': true,
+          'laterFromList': fromLaterList,
+        };
+      }
     }
     return _openVideoPage(
       videoType: videoType,
