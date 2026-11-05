@@ -47,15 +47,23 @@ class _PicksPageState extends State<PicksPage>
         response != null && response.isNotEmpty
             ? SliverGrid.builder(
                 gridDelegate: gridDelegate,
-                itemBuilder: (context, index) => VideoCardH(
-                  videoItem: response[index],
-                  onRemove: () => controller.loadingState
-                    ..value.data!.removeAt(index)
-                    ..refresh(),
-                ),
+                itemBuilder: (context, index) {
+                  if (index == response.length - 1) {
+                    controller.onLoadMore();
+                  }
+                  return VideoCardH(
+                    videoItem: response[index],
+                    onRemove: () => controller.loadingState
+                      ..value.data!.removeAt(index)
+                      ..refresh(),
+                  );
+                },
                 itemCount: response.length,
               )
-            : HttpError(errMsg: '这批精选是空的', onReload: controller.onReload),
+            : HttpError(
+                errMsg: '精选都看完了，等服务器采集新视频',
+                onReload: controller.onReload,
+              ),
       Error(:final errMsg) => HttpError(
         errMsg: errMsg,
         onReload: controller.onReload,
