@@ -6,6 +6,8 @@ import 'package:PiliPlus/pages/live/controller.dart';
 import 'package:PiliPlus/pages/live/view.dart';
 import 'package:PiliPlus/pages/pgc/controller.dart';
 import 'package:PiliPlus/pages/pgc/view.dart';
+import 'package:PiliPlus/pages/picks/controller.dart';
+import 'package:PiliPlus/pages/picks/view.dart';
 import 'package:PiliPlus/pages/rank/controller.dart';
 import 'package:PiliPlus/pages/rank/view.dart';
 import 'package:PiliPlus/pages/rcmd/controller.dart';
@@ -20,7 +22,8 @@ enum HomeTabType implements EnumWithLabel {
   rank('分区'),
   bangumi('番剧'),
   cinema('影视'),
-  ;
+  // 加在最后：首页标签页的排序按下标保存，插在中间会打乱已保存的设置
+  picks('精选');
 
   @override
   final String label;
@@ -33,6 +36,7 @@ enum HomeTabType implements EnumWithLabel {
     HomeTabType.rank => Get.find<RankController>,
     HomeTabType.bangumi ||
     HomeTabType.cinema => () => Get.find<PgcController>(tag: name),
+    HomeTabType.picks => Get.find<PicksController>,
   };
 
   Widget get page => switch (this) {
@@ -42,5 +46,6 @@ enum HomeTabType implements EnumWithLabel {
     HomeTabType.rank => const RankPage(),
     HomeTabType.bangumi => const PgcPage(tabType: HomeTabType.bangumi),
     HomeTabType.cinema => const PgcPage(tabType: HomeTabType.cinema),
+    HomeTabType.picks => const PicksPage(),
   };
 }

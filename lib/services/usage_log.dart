@@ -59,6 +59,8 @@ import 'package:PiliPlus/models_new/video/video_detail/page.dart';
 import 'package:PiliPlus/models_new/video/video_tag/data.dart';
 import 'package:PiliPlus/pages/hot/controller.dart';
 import 'package:PiliPlus/pages/member_video_web/base/controller.dart';
+import 'package:PiliPlus/http/picks.dart';
+import 'package:PiliPlus/pages/picks/controller.dart';
 import 'package:PiliPlus/pages/popular_precious/controller.dart';
 import 'package:PiliPlus/pages/popular_series/controller.dart';
 import 'package:PiliPlus/pages/rank/zone/controller.dart';
@@ -70,6 +72,7 @@ import 'package:PiliPlus/plugin/pl_player/models/play_status.dart';
 import 'package:PiliPlus/utils/date_utils.dart';
 import 'package:PiliPlus/utils/id_utils.dart';
 import 'package:PiliPlus/utils/path_utils.dart';
+import 'package:PiliPlus/utils/storage.dart';
 import 'package:PiliPlus/utils/storage_utils.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart' show debugPrint, kDebugMode;
@@ -151,10 +154,7 @@ abstract final class UsageLog {
       onDetach: _flushNow,
     );
     _watchNetwork();
-    log('app_start', {
-      'platform': Platform.operatingSystem,
-      ..._context(),
-    });
+    log('app_start', {'platform': Platform.operatingSystem, ..._context()});
   }
 
   static void _onShow() {
@@ -188,6 +188,7 @@ abstract final class UsageLog {
       _backgroundSinceMs = now;
       log('app_background', {..._video.snapshot(), ..._context()});
       _Impressions.onForegroundChange();
+      _maybeUpload();
     }
     _flushNow();
   }
@@ -213,10 +214,7 @@ abstract final class UsageLog {
       final connectivity = Connectivity();
       connectivity.checkConnectivity().then(_onNetwork, onError: (_) {});
       // 与应用同生命周期，只在 init 中调用一次，不需要取消。
-      connectivity.onConnectivityChanged.listen(
-        _onNetwork,
-        onError: (_) {},
-      );
+      connectivity.onConnectivityChanged.listen(_onNetwork, onError: (_) {});
     } catch (e) {
       if (kDebugMode) debugPrint('UsageLog network error: $e');
     }
@@ -522,6 +520,19 @@ abstract final class UsageLog {
     }
   }
 
+  /// 用 VACUUM INTO 生成一份一致的副本并读出来，不受 WAL 中未合并内容影响。
+  static Future<Uint8List> _snapshot(Database db, String name) async {
+    _flushNow();
+    final tmp = File(path.join(tmpDirPath, name));
+    try {
+      if (tmp.existsSync()) tmp.deleteSync();
+      db.execute('VACUUM INTO ?', [tmp.path]);
+      return await tmp.readAsBytes();
+    } finally {
+      if (tmp.existsSync()) tmp.deleteSync();
+    }
+  }
+
   /// 把全部记录导出为一个独立的 SQLite 数据库文件，由用户选择保存位置。
   static Future<void> export() async {
     final db = _db;
@@ -529,19 +540,12 @@ abstract final class UsageLog {
       SmartDialog.showToast('使用记录未启用');
       return;
     }
-    _flushNow();
-    final tmp = File(path.join(tmpDirPath, 'usage_log_export.db'));
     final Uint8List bytes;
     try {
-      if (tmp.existsSync()) tmp.deleteSync();
-      // VACUUM INTO 生成一份一致的副本，不受 WAL 中未合并内容影响。
-      db.execute('VACUUM INTO ?', [tmp.path]);
-      bytes = await tmp.readAsBytes();
+      bytes = await _snapshot(db, 'usage_log_export.db');
     } catch (e) {
       SmartDialog.showToast('导出失败: $e');
       return;
-    } finally {
-      if (tmp.existsSync()) tmp.deleteSync();
     }
     await StorageUtils.saveBytes2File(
       name:
@@ -550,6 +554,34 @@ abstract final class UsageLog {
       bytes: bytes,
       allowedExtensions: const ['db'],
     );
+  }
+
+  static const _uploadAtKey = 'usageLogUploadAt';
+  static bool _uploading = false;
+
+  /// 切到后台时把整个数据库传到 bili-feed 服务器，用来改进「精选」。
+  /// Wi-Fi 下至少隔 6 小时，其他网络至少隔 24 小时；失败了下次切后台再试。
+  static Future<void> _maybeUpload() async {
+    final db = _db;
+    if (db == null || _uploading || _network == 'none') return;
+    final last = GStorage.setting.get(_uploadAtKey, defaultValue: 0) as int;
+    final gap = _network == 'wifi'
+        ? const Duration(hours: 6)
+        : const Duration(hours: 24);
+    if (_now() - last < gap.inMilliseconds) return;
+    _uploading = true;
+    try {
+      final bytes = await _snapshot(db, 'usage_log_upload.db');
+      final ok = await PicksHttp.uploadUsageLog(bytes);
+      if (ok) {
+        await GStorage.setting.put(_uploadAtKey, _now());
+      }
+      log('usage_log_upload', {'ok': ok, 'bytes': bytes.length});
+    } catch (e) {
+      if (kDebugMode) debugPrint('UsageLog upload error: $e');
+    } finally {
+      _uploading = false;
+    }
   }
 
   /// 转发给「本地时间采集」（Android，UsageLogBridge.kt）。数据库才是权威记录，
@@ -609,6 +641,7 @@ abstract final class UsageLog {
       context: const {},
     ),
     HotController() => (name: 'hot', context: const {}),
+    PicksController() => (name: 'picks', context: const {}),
     RelatedController(:final bvid) => (
       name: 'related',
       context: {'from_bvid': bvid},
@@ -830,11 +863,7 @@ abstract final class UsageLog {
   static final _video = _VideoTracker();
 
   /// 视频（或直播、番剧、离线缓存）详情加载完成。
-  static void videoInfo(
-    Object? data,
-    int cid, {
-    String? artist,
-  }) {
+  static void videoInfo(Object? data, int cid, {String? artist}) {
     if (!_enabled || data == null) return;
     final info = _videoInfoFields(data, cid, artist);
     if (info == null) return;
