@@ -4,9 +4,11 @@ import 'package:PiliPlus/http/loading_state.dart';
 import 'package:PiliPlus/models/model_hot_video_item.dart';
 import 'package:dio/dio.dart';
 
-/// 自己服务器（bili-feed，Tailscale 内网）上的精选推荐，以及使用记录上传。
+/// 自己服务器（bili-feed，oracle-arm）上的精选推荐，以及使用记录上传。
+/// 10.0.0.118 是 ARM 的内网 IP，只有开着 Clash（gist 订阅里的 `IP-CIDR,10.0.0.118/32,Oracle` 规则，
+/// 经中转连 ARM 的 ss）时才能访问。
 abstract final class PicksHttp {
-  static const server = 'http://100.80.206.107:8790';
+  static const server = 'http://10.0.0.118:8790';
 
   // 不用 Request().dio：那边的拦截器会给请求加 B 站的 cookie 和请求头
   static final _dio = Dio(
@@ -38,7 +40,7 @@ abstract final class PicksHttp {
       }
       return Error(data['message']?.toString() ?? '精选服务器返回 ${data['code']}');
     } catch (e) {
-      return Error('连不上精选服务器（需要打开 Tailscale）\n$e');
+      return Error('连不上精选服务器（需要打开 Clash）\n$e');
     }
   }
 
